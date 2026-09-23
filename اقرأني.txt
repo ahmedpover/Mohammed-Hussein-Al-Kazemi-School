@@ -1,6 +1,9 @@
-مدرسة الشيخ محمد حسين الكاظمي — معاينة v0.6
+إعداد نشر مدرسة الشيخ محمد حسين الكاظمي على Railway
 
-صفحة الدخول والتسجيل بدون الصورة الجانبية وبعرض الصفحة.
-لفتح المعاينة فك الضغط وافتح index.html الموجود بجانب project.
-لتحديث GitHub ارفع index.html الجديد إلى جذر المستودع، وحدث مجلد project إذا تريد حفظ كود التطوير الجديد. عند ظهور رسالة استبدال الملف اختر الموافقة.
-الحسابات محلية وتجريبية على نفس الجهاز فقط.
+1) فك الضغط. داخل مستودع GitHub اضغط Add file → Upload files.
+2) ارفع الملفات الثلاثة إلى جذر المستودع نفسه حيث يوجد index.html ومجلد project: Dockerfile و Caddyfile و .dockerignore.
+3) اضغط Commit changes. لا ترفع مجلدًا إضافيًا حول الملفات ولا ملف ZIP نفسه.
+4) في Railway: New Project → Deploy from GitHub repo → Mohammed-Hussein-Al-Kazemi-School → Deploy.
+5) اترك Root Directory على / (الجذر). بعد نجاح البناء افتح الخدمة → Settings → Networking → Generate Domain.
+
+الموقع الحالي تجربة محلية؛ Railway ينشر الواجهة فقط ولا يربط حسابات الطلاب والأساتذة بين الأجهزة.
