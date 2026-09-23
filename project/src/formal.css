@@ -29,6 +29,14 @@ h1,h2,h3,h4,.school-mark strong{font-family:"Amiri","Noto Sans Arabic",serif;fon
   filter:sepia(.42) saturate(.70)
 }
 .entry-visual:after{content:"";position:absolute;inset:19px;border:1px solid rgba(255,251,231,.58);pointer-events:none}
+.entry-account{display:block;min-height:100vh;background:var(--bg)}
+.entry-account .entry-main{min-height:100vh;width:100%;display:flex;flex-direction:column;align-items:center;padding:25px 24px 18px;background:var(--bg)}
+.entry-account .entry-top{width:min(100%,1080px);flex:none}
+.entry-account .entry-content{width:min(100%,540px);max-width:none;margin:30px auto 25px;padding:0}
+.entry-account .entry-content>.eyebrow{display:none}
+.entry-account .account-card{width:100%;max-width:none;margin:0}
+.entry-account .preview-note{margin-top:18px;line-height:1.8}
+.entry-account .entry-footer{width:min(100%,1080px);margin-top:auto;text-align:center}
 .entry-main{background:var(--surface);position:relative;padding-top:54px}
 .entry-main:before{content:"";position:absolute;top:0;right:0;left:0;height:7px;background:linear-gradient(90deg,#b39157,#e5d2a9,#927445)}
 .entry-main:after{content:"";position:absolute;left:8%;bottom:12%;width:120px;height:120px;border:1px solid rgba(167,121,51,.09);transform:rotate(45deg);pointer-events:none}
@@ -125,6 +133,8 @@ h1,h2,h3,h4,.school-mark strong{font-family:"Amiri","Noto Sans Arabic",serif;fon
 @media(max-width:1100px){.sidebar{width:242px}.entry-main{padding-inline:42px}}
 @media(max-width:800px){.sidebar{width:min(82vw,300px)}.entry-visual{min-height:290px;height:39vh;background-position:center 57%;border-left:0;border-bottom:10px solid #c7b18a}.entry-main{min-height:61vh;padding-top:28px}.topbar{height:69px}}
 @media(max-width:620px){
+  .entry-account .entry-main{min-height:100vh;padding:16px 16px 20px}
+  .entry-account .entry-content{margin:24px auto 15px;padding:0}
   .entry-visual{height:30vh;min-height:215px;max-height:290px;background-position:center 59%;border-bottom-width:7px}
   .entry-visual:after{inset:10px}.entry-main{padding:20px 21px 23px}.entry-content{padding:28px 0}
   .entry-content h1{font-size:39px;line-height:1.48}.entry-content>p{font-size:14px}

@@ -176,14 +176,13 @@ export default function App() {
   const nav = role === 'teacher' ? NAV_TEACHER : NAV_STUDENT;
 
   if (!role) return <div className={dark ? 'app dark' : 'app'}>
-    <div className="entry">
-      <div className="entry-visual" role="img" aria-label="صورة مبنى مدرسة الشيخ محمد حسين الكاظمي" />
+    <div className={`entry ${page === 'account' ? 'entry-account' : ''}`}>
+      {page !== 'account' && <div className="entry-visual" role="img" aria-label="صورة مبنى مدرسة الشيخ محمد حسين الكاظمي" />}
       <main className="entry-main">
         <div className="entry-top"><Brand /><IconButton icon={dark ? Sun : Moon} label={dark ? 'الوضع الفاتح' : 'الوضع الداكن'} onClick={() => setDark(!dark)} /></div>
         <div className="entry-content">
           <span className="eyebrow"><span className="eyebrow-line" /> المنصة التعليمية</span>
-          <h1>مدرسة الشيخ<br /><span>محمد حسين الكاظمي</span></h1>
-          <p>محاضراتك وموادك وملاحظاتك في مكان واحد، أينما كنت.</p>
+          {page !== 'account' && <><h1>مدرسة الشيخ<br /><span>محمد حسين الكاظمي</span></h1><p>محاضراتك وموادك وملاحظاتك في مكان واحد، أينما كنت.</p></>}
           {page === 'account' ? <Account onLogin={login} /> : <div className="entry-actions">
             <button className="primary-button" onClick={() => go('account')}>تسجيل الدخول أو إنشاء حساب <ArrowLeft size={18} /></button>
           </div>}
