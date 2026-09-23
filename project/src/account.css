@@ -1,0 +1,8 @@
+.account-card{width:min(100%,580px);margin:0 auto;padding:34px;background:var(--surface);border:1px solid var(--line);border-radius:5px;box-shadow:var(--shadow);color:var(--ink)}
+.account-form{margin:0;max-width:540px}.account-medallion{width:55px;height:55px;display:grid;place-items:center;background:var(--surface-soft);border:1px solid var(--line);color:var(--teal);border-radius:4px;margin-bottom:18px}
+.account-card h2,.account-card h3{font-size:32px;line-height:1.4;margin:4px 0}.account-card>p{font-size:14px;color:var(--muted);line-height:1.9}
+.account-tabs{display:flex;border-bottom:1px solid var(--line);margin:23px 0}.account-tabs button{flex:1;border:0;background:none;padding:12px 8px;color:var(--muted);cursor:pointer}.account-tabs button.active{border-bottom:2px solid var(--gold);color:var(--ink);font-weight:700}
+.account-form form{display:grid;gap:16px}.account-form label{display:grid;gap:7px;font-size:13px;font-weight:700}.account-form input,.account-form select{min-height:48px;width:100%;border:1px solid var(--line);border-radius:4px;background:var(--surface-soft);color:var(--ink);padding:10px 12px;outline-color:var(--gold)}
+.account-form input[dir=ltr]{text-align:left}.account-form form>.primary-button{margin-top:5px}.account-card .account-notice{border:1px solid var(--line);background:var(--surface-soft);padding:12px 14px;font-size:12px;line-height:2;margin:22px 0 0}
+.account-detail{display:flex;align-items:center;gap:10px;margin:22px 0;color:var(--teal);overflow-wrap:anywhere}.account-card>.secondary-button{margin-top:22px}
+@media(max-width:620px){.account-card{padding:22px}.account-card h2,.account-card h3{font-size:27px}}
