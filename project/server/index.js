@@ -12,6 +12,8 @@ const scrypt = promisify(rawScrypt);
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : undefined });
 const app = express();
 app.disable('x-powered-by');
+// Railway terminates HTTPS at its proxy and forwards the original scheme.
+app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '32kb' }));
 const id = () => randomUUID();
