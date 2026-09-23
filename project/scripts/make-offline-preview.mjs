@@ -18,7 +18,7 @@ const result = await build({
   minify: true,
   write: false,
   outdir: resolve(projectRoot, 'offline-bundle'),
-  define: { 'process.env.NODE_ENV': '"production"' },
+  define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{}' },
 });
 
 const js = result.outputFiles.find(file => file.path.endsWith('.js'))?.text;

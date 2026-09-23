@@ -1,0 +1,26 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function verified() { return request.auth != null && request.auth.token.email_verified == true; }
+    function admin() { return verified() && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid)); }
+    function invitePath() { return /databases/(default)/documents/teacherInvites/$(request.auth.token.email); }
+    function teaches(subject) { return verified() && firestore.exists(invitePath()) && firestore.get(invitePath()).data.active == true && subject in firestore.get(invitePath()).data.subjects; }
+    function channelPath(id) { return /databases/(default)/documents/channels/$(id); }
+    function lecturePath(id) { return /databases/(default)/documents/lectures/$(id); }
+    function ownsChannel(id) { return verified() && firestore.exists(channelPath(id)) && firestore.get(channelPath(id)).data.ownerId == request.auth.uid && teaches(firestore.get(channelPath(id)).data.subject); }
+    function ownsLecture(id) { return verified() && firestore.exists(lecturePath(id)) && firestore.get(lecturePath(id)).data.ownerId == request.auth.uid && teaches(firestore.get(lecturePath(id)).data.subject); }
+
+    match /channelImages/{channelId}/{postId} {
+      allow read: if admin() || ownsChannel(channelId) || (verified() && firestore.exists(/databases/(default)/documents/memberships/$(request.auth.uid + '_' + channelId)));
+      allow create, update: if ownsChannel(channelId)
+        && request.resource.size <= 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if ownsChannel(channelId) || admin();
+    }
+    match /lectureMedia/{lectureId}/{kind} {
+      allow read: if verified() && firestore.exists(lecturePath(lectureId));
+      allow create, update: if ownsLecture(lectureId) && ((kind == 'pdf' && request.resource.size <= 25 * 1024 * 1024 && request.resource.contentType == 'application/pdf') || (kind == 'audio' && request.resource.size <= 100 * 1024 * 1024 && request.resource.contentType.matches('audio/.*')));
+      allow delete: if ownsLecture(lectureId) || admin();
+    }
+  }
+}

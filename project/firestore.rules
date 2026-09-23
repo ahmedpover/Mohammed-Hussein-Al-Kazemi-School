@@ -1,0 +1,107 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function verified() { return signedIn() && request.auth.token.email_verified == true; }
+    function admin() { return verified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function invitePath() { return /databases/$(database)/documents/teacherInvites/$(request.auth.token.email); }
+    function invited() { return verified() && exists(invitePath()) && get(invitePath()).data.active == true; }
+    function teaches(subject) { return invited() && subject in get(invitePath()).data.subjects; }
+    function channelPath(channelId) { return /databases/$(database)/documents/channels/$(channelId); }
+    function memberPath(channelId) { return /databases/$(database)/documents/memberships/$(request.auth.uid + '_' + channelId); }
+    function ownsChannel(channelId) { return invited() && exists(channelPath(channelId)) && get(channelPath(channelId)).data.ownerId == request.auth.uid && teaches(get(channelPath(channelId)).data.subject); }
+
+    match /admins/{uid} {
+      allow get: if verified() && request.auth.uid == uid;
+      allow list, create, update, delete: if false; // The first admin is created in Firebase Console.
+    }
+    match /teacherInvites/{email} {
+      allow get: if admin() || (verified() && request.auth.token.email == email);
+      allow list: if admin();
+      allow create, update: if admin()
+        && request.resource.data.keys().hasOnly(['name', 'subjects', 'active', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 70
+        && request.resource.data.subjects is list && request.resource.data.subjects.size() > 0 && request.resource.data.subjects.size() <= 20
+        && request.resource.data.active is bool
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false; // Disable the teacher instead to retain an audit trail.
+    }
+    match /channelHandles/{handle} {
+      allow get: if verified();
+      allow list: if false;
+      allow create: if verified() && !exists(/databases/$(database)/documents/channelHandles/$(handle))
+        && request.resource.data.keys().hasOnly(['channelId'])
+        && existsAfter(channelPath(request.resource.data.channelId))
+        && getAfter(channelPath(request.resource.data.channelId)).data.handle == handle
+        && getAfter(channelPath(request.resource.data.channelId)).data.ownerId == request.auth.uid;
+      allow delete: if admin() || (verified() && exists(channelPath(resource.data.channelId)) && get(channelPath(resource.data.channelId)).data.ownerId == request.auth.uid && ownsChannel(resource.data.channelId));
+      allow update: if false;
+    }
+    match /channels/{channelId} {
+      allow get, list: if verified(); // Only metadata is public to signed-in school users.
+      allow create: if verified() && teaches(request.resource.data.subject)
+        && request.resource.data.keys().hasOnly(['name', 'subject', 'book', 'description', 'handle', 'ownerId', 'teacherName', 'createdAt'])
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.teacherName == get(invitePath()).data.name
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 70
+        && request.resource.data.book is string && request.resource.data.book.size() > 0 && request.resource.data.book.size() <= 100
+        && request.resource.data.description is string && request.resource.data.description.size() <= 180
+        && request.resource.data.handle is string && request.resource.data.handle.matches('^[a-z][a-z0-9_]{3,23}$')
+        && request.resource.data.createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/channelHandles/$(request.resource.data.handle))
+        && getAfter(/databases/$(database)/documents/channelHandles/$(request.resource.data.handle)).data.channelId == channelId;
+      allow update: if false;
+      allow delete: if admin() || (resource.data.ownerId == request.auth.uid && teaches(resource.data.subject));
+
+      match /posts/{postId} {
+        allow get, list: if admin() || ownsChannel(channelId) || (verified() && exists(memberPath(channelId)));
+        allow create: if ownsChannel(channelId)
+          && request.resource.data.keys().hasOnly(['text', 'imageUrl', 'imagePath', 'ownerId', 'createdAt'])
+          && request.resource.data.ownerId == request.auth.uid
+          && request.resource.data.text is string && request.resource.data.text.size() <= 3000
+          && request.resource.data.imageUrl is string && request.resource.data.imageUrl.size() <= 2000
+          && request.resource.data.imagePath is string && request.resource.data.imagePath.size() <= 180
+          && (request.resource.data.text.size() > 0 || request.resource.data.imagePath.size() > 0)
+          && request.resource.data.createdAt == request.time;
+        allow delete: if admin() || ownsChannel(channelId);
+        allow update: if false;
+      }
+    }
+    match /memberships/{membershipId} {
+      allow get, list: if verified() && resource.data.uid == request.auth.uid;
+      allow create: if verified()
+        && request.resource.data.keys().hasOnly(['uid', 'channelId', 'joinedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && membershipId == request.auth.uid + '_' + request.resource.data.channelId
+        && exists(channelPath(request.resource.data.channelId))
+        && request.resource.data.joinedAt == request.time;
+      allow delete: if verified() && resource.data.uid == request.auth.uid;
+      allow update: if false;
+    }
+    match /lectures/{lectureId} {
+      allow get, list: if verified();
+      allow create: if teaches(request.resource.data.subject)
+        && request.resource.data.keys().hasOnly(['title', 'subject', 'book', 'description', 'ownerId', 'teacherName', 'createdAt', 'audioUrl', 'pdfUrl'])
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.teacherName == get(invitePath()).data.name
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.audioUrl == '' && request.resource.data.pdfUrl == ''
+        && validLecture();
+      allow update: if resource.data.ownerId == request.auth.uid && teaches(resource.data.subject)
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.subject == resource.data.subject
+        && request.resource.data.teacherName == resource.data.teacherName
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.keys().hasOnly(['title', 'subject', 'book', 'description', 'ownerId', 'teacherName', 'createdAt', 'audioUrl', 'pdfUrl'])
+        && validLecture();
+      allow delete: if admin() || (resource.data.ownerId == request.auth.uid && teaches(resource.data.subject));
+    }
+    function validLecture() {
+      return request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 100
+        && request.resource.data.book is string && request.resource.data.book.size() > 0 && request.resource.data.book.size() <= 100
+        && request.resource.data.description is string && request.resource.data.description.size() <= 500
+        && request.resource.data.audioUrl is string && request.resource.data.audioUrl.size() <= 2000
+        && request.resource.data.pdfUrl is string && request.resource.data.pdfUrl.size() <= 2000;
+    }
+  }
+}
