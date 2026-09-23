@@ -1,4 +1,9 @@
 import { api, json, date } from './api.js';
+export const loadStudents=()=>api('/admin/students');
+export const loadStudent=id=>api(`/admin/students/${id}`);
+export const saveCourse=(id,courseNumber)=>json(`/admin/students/${id}`,'PATCH',{courseNumber});
+export const sendStudentNotification=(id,message)=>json(`/admin/students/${id}/notifications`,'POST',{message});
+export const markNotificationRead=id=>json(`/notifications/${id}/read`,'PATCH',{});
 export const formatDate=date;
 export const loadData=()=>api('/data');
 export const loadPosts=id=>api(`/channels/${id}/posts`);
