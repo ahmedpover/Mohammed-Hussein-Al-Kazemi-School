@@ -25,7 +25,7 @@ const hash = async password => { const salt = randomBytes(16).toString('hex'); r
 const verify = async (password, stored) => { const [salt, digest] = stored.split(':'); const actual = await scrypt(password, salt, 64); const expected = Buffer.from(digest, 'hex'); return actual.length === expected.length && timingSafeEqual(actual, expected); };
 const digestToken = token => createHash('sha256').update(token).digest('hex');
 const query = (sql, args=[]) => pool.query(sql,args);
-const wrap = handler => async (req,res,next) => { try { await handler(req,res); } catch (error) { next(error); } };
+const wrap = handler => async (req,res,next) => { try { await handler(req,res,next); } catch (error) { next(error); } };
 const authLimit = rateLimit({ windowMs: 15*60*1000, limit: 12, standardHeaders: 'draft-7', legacyHeaders: false });
 app.use('/api/auth/login', authLimit);
 app.use('/api/auth/register', authLimit);
