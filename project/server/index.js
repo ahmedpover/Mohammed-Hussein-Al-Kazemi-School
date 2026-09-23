@@ -69,6 +69,27 @@ app.get('/api/health',(_req,res)=>res.json({ok:true}));
 app.post('/api/auth/register',wrap(async(req,res)=>{ const email=emailKey(req.body.email), name=clean(req.body.name,70), password=req.body.password, inviteCode=String(req.body.inviteCode||'').trim(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!valid(name,70)||typeof password!=='string'||password.length<10||password.length>128) throw fail(400,'تحقق من البريد والاسم وكلمة مرور لا تقل عن ١٠ أحرف.'); try { let role='student'; if(inviteCode){const {rows}=await query('SELECT code_hash,active FROM invites WHERE email=$1',[email]);if(!rows[0]?.active||!rows[0].code_hash||digestToken(inviteCode)!==rows[0].code_hash)throw fail(403,'رمز دعوة الأستاذ غير صحيح.');role='teacher';} const userId=id(); await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[userId,email,name,await hash(password),role]); await session(res,userId); res.status(201).json({ok:true}); } catch(e){ if(e.code==='23505') throw fail(409,'البريد مسجّل مسبقًا.'); throw e; } }));
 app.post('/api/auth/login',wrap(async(req,res)=>{ const {rows}=await query('SELECT id,password_hash FROM users WHERE email=$1',[emailKey(req.body.email)]); if(!rows.length || !(await verify(String(req.body.password||''),rows[0].password_hash))) throw fail(401,'البريد أو كلمة المرور غير صحيحة.'); await session(res,rows[0].id); res.json({ok:true}); }));
 app.post('/api/auth/logout',wrap(async(req,res)=>{ const token=cookie(req); if(token) await query('DELETE FROM sessions WHERE token_hash=$1',[digestToken(token)]); res.clearCookie('school_session',{path:'/'}); res.json({ok:true}); }));
+app.delete('/api/auth/account',requireUser,wrap(async(req,res)=>{
+ const password=req.body?.password;
+ if(typeof password!=='string'||!password) throw fail(400,'أدخل كلمة المرور لتأكيد حذف الحساب.');
+ const client=await pool.connect();
+ try {
+  await client.query('BEGIN');
+  const {rows}=await client.query('SELECT email,role,password_hash FROM users WHERE id=$1 FOR UPDATE',[req.actor.id]);
+  if(!rows.length) throw fail(401,'سجّل الدخول أولاً.');
+  if(rows[0].role==='admin') throw fail(403,'لا يمكن حذف حساب الإدارة من هنا.');
+  if(!(await verify(password,rows[0].password_hash))) throw fail(401,'كلمة المرور غير صحيحة.');
+  await client.query('DELETE FROM posts WHERE owner_id=$1',[req.actor.id]);
+  await client.query('DELETE FROM channels WHERE owner_id=$1',[req.actor.id]);
+  await client.query('DELETE FROM lectures WHERE owner_id=$1',[req.actor.id]);
+  if(rows[0].role==='teacher') await client.query('DELETE FROM invites WHERE email=$1',[rows[0].email]);
+  await client.query('DELETE FROM users WHERE id=$1',[req.actor.id]);
+  await client.query('COMMIT');
+ } catch(error) { await client.query('ROLLBACK'); throw error; }
+ finally { client.release(); }
+ res.clearCookie('school_session',{path:'/'});
+ res.json({ok:true});
+}));
 app.get('/api/me',requireUser,wrap(async(req,res)=>{ const {id,email,name,role,subjects}=req.actor; res.json({id,email,name,role,subjects}); }));
 app.get('/api/data',requireUser,wrap(async(req,res)=>{ const user=req.actor; const [c,l,j,i,n]=await Promise.all([query('SELECT id,handle,name,subject,book,description,owner_id AS "ownerId",teacher_name AS "teacherName",created_at AS "createdAt" FROM channels ORDER BY created_at DESC'),query(`SELECT l.id,title,subject,book,description,owner_id AS "ownerId",teacher_name AS "teacherName",created_at AS "createdAt",EXISTS(SELECT 1 FROM media m WHERE m.lecture_id=l.id AND kind='audio') AS "hasAudio",EXISTS(SELECT 1 FROM media m WHERE m.lecture_id=l.id AND kind='pdf') AS "hasPdf" FROM lectures l ORDER BY created_at DESC`),query('SELECT channel_id FROM memberships WHERE user_id=$1',[user.id]),user.role==='admin'?query('SELECT email,name,subjects,active FROM invites ORDER BY name'):Promise.resolve({rows:[]}),query('SELECT id,message,created_at AS "createdAt",read_at AS "readAt" FROM notifications WHERE student_id=$1 ORDER BY created_at DESC LIMIT 100',[user.id])]); res.json({channels:c.rows,lectures:l.rows.map(x=>({...x,audioUrl:x.hasAudio?`/api/lectures/${x.id}/media/audio`:'',pdfUrl:x.hasPdf?`/api/lectures/${x.id}/media/pdf`:''})),joined:j.rows.map(x=>x.channel_id),invites:i.rows,notifications:n.rows}); }));
 app.get('/api/admin/students',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT u.id,u.name,u.email,u.course_number AS "courseNumber",u.created_at AS "createdAt",COALESCE(json_agg(DISTINCT c.subject) FILTER(WHERE c.subject IS NOT NULL),'[]'::json) AS subjects,COUNT(DISTINCT m.channel_id)::int AS "channelCount" FROM users u LEFT JOIN memberships m ON m.user_id=u.id LEFT JOIN channels c ON c.id=m.channel_id WHERE u.role='student' GROUP BY u.id ORDER BY u.created_at DESC`); res.json(rows); }));

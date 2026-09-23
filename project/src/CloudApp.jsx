@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, GraduationCap, LogOut, Moon, Sun, UserRound, Users, Plus, Headphones, MessagesSquare, X, Trash2, ArrowRight, FileText, Bell } from 'lucide-react';
-import { me, logout, date } from './api.js';
+import { me, logout, deleteAccount, date } from './api.js';
 import CloudAccount from './CloudAccount.jsx';
 import Channels from './Channels.jsx';
 import AdminStudents from './AdminStudents.jsx';
@@ -25,6 +25,9 @@ export default function CloudApp() {
   const [editingLecture, setEditingLecture] = useState(undefined);
   const [selectedLecture, setSelectedLecture] = useState(null);
   const [toast, setToast] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   async function refreshUser() { const current=await me(); setUser(current); setIdentity(current); setPage('home'); }
   useEffect(() => { refreshUser().catch(() => {setUser(null);setError('تعذر الاتصال بالخادم.');}); }, []);
@@ -32,6 +35,7 @@ export default function CloudApp() {
   const refresh = async () => { const data=await loadData();setChannels(data.channels);setLectures(data.lectures.map(item=>({...item,date:date(item.createdAt)})));setJoined(data.joined);setInvites(data.invites);setNotifications(data.notifications || []);const visible=data.channels.filter(item=>identity?.role==='admin'||item.ownerId===user?.id||data.joined.includes(item.id));const all=await Promise.all(visible.map(async item=>[item.id,await loadPosts(item.id)]));setPosts(Object.fromEntries(all.map(([id,items])=>[id,items.map(item=>({...item,date:date(item.createdAt)}))]))); };
   useEffect(() => { if(!identity)return;let alive=true;const update=()=>{if(alive)refresh().catch(()=>setError('تعذر تحميل البيانات.'));};update();const timer=setInterval(update,7000);return()=>{alive=false;clearInterval(timer);}; },[identity?.id]);
   const signOut=async()=>{await logout();setUser(null);setIdentity(null);};
+  const removeMyAccount=async event=>{event.preventDefault();setDeleteBusy(true);setError('');try { await deleteAccount(deletePassword);setIdentity(null);setUser(null);setDeletePassword('');setDeletingAccount(false); } catch(cause) {setError(cause.message||'تعذر حذف الحساب.');} finally {setDeleteBusy(false);} };
   const say = message => { setToast(message); setTimeout(() => setToast(''), 3800); };
   const attempt = async (action, success) => { try { setError(''); const result = await action(); if (success) say(success); await refresh(); return result; } catch (cause) { setError(cause.message || 'تعذر تنفيذ العملية.'); throw cause; } };
   const role = identity?.role;
@@ -63,7 +67,7 @@ export default function CloudApp() {
         onDeleteChannel={async channel => { if (!window.confirm(`حذف قناة «${channel.name}» ومنشوراتها؟`)) return false; await attempt(() => removeChannel(channel), 'حُذفت القناة'); return true; }} />}
       {page === 'lectures' && (selectedLecture ? <LectureView lecture={lectures.find(item => item.id === selectedLecture) || selectedLecture} onBack={() => setSelectedLecture(null)} /> : <section className="section-block cloud-lectures"><div className="section-head"><div><h3>{isTeacher ? 'محاضراتي' : 'المواد والمحاضرات'}</h3><p>{listed.length} محاضرات</p></div>{isTeacher && <button className="primary-button" onClick={() => setEditingLecture(null)}><Plus size={17} /> إضافة محاضرة</button>}</div>{isTeacher && editingLecture !== undefined && <LectureForm initial={editingLecture} subjects={identity.subjects} onCancel={() => setEditingLecture(undefined)} onSave={async data => { await attempt(() => saveLecture(user, data, editingLecture, identity.name), 'حُفظت المحاضرة'); setEditingLecture(undefined); }} />}{listed.length ? <div className="lecture-stack">{listed.map(item => <article className="lecture-row" key={item.id}><div className="round-icon mint"><BookOpen size={21} /></div><button className="lecture-main" onClick={() => setSelectedLecture(item.id)}><strong>{item.title}</strong><span>{item.subject} · {item.book} · {item.date}</span></button>{isTeacher && <><button className="row-action" onClick={() => setEditingLecture(item)}>تعديل</button><button className="row-action danger-text" onClick={() => { if (window.confirm('حذف هذه المحاضرة؟')) attempt(() => removeLecture(item), 'حُذفت المحاضرة').catch(() => {}); }} aria-label="حذف المحاضرة"><Trash2 size={16} /></button></>}</article>)}</div> : <p className="quiet-empty">لا توجد محاضرات منشورة بعد.</p>}</section>)}
       {page === 'notifications' && role === 'student' && <Notifications items={notifications} onRefresh={refresh} />}
-      {page === 'account' && <section className="account-card"><span className="overline">حساب المدرسة</span><h3>{identity.name}</h3><p>{role === 'admin' ? 'مدير المدرسة' : role === 'teacher' ? 'أستاذ معتمد' : 'طالب'}</p><p dir="ltr">{user.email}</p>{isTeacher && <p className="account-notice">المواد المعتمدة: {identity.subjects.join('، ')}</p>}<button className="secondary-button" onClick={signOut}>تسجيل الخروج</button></section>}
+      {page === 'account' && <section className="account-card"><span className="overline">حساب المدرسة</span><h3>{identity.name}</h3><p>{role === 'admin' ? 'مدير المدرسة' : role === 'teacher' ? 'أستاذ معتمد' : 'طالب'}</p><p dir="ltr">{user.email}</p>{isTeacher && <p className="account-notice">المواد المعتمدة: {identity.subjects.join('، ')}</p>}<button className="secondary-button" onClick={signOut}>تسجيل الخروج</button>{role !== 'admin' && <div className="account-delete"><h4>حذف الحساب نهائيًا</h4><p>{isTeacher ? 'سيُحذف حسابك وقنواتك ومنشوراتها ومحاضراتك وملفاتها ورمز دعوتك.' : 'سيُحذف حسابك وعضوياتك بالقنوات وإشعاراتك ورقم دورتك.'} لا يمكن التراجع عن الحذف.</p>{!deletingAccount ? <button type="button" className="account-delete-button" onClick={() => setDeletingAccount(true)}>حذف حسابي</button> : <form onSubmit={removeMyAccount}><label htmlFor="delete-account-password">أدخل كلمة المرور للتأكيد</label><input id="delete-account-password" type="password" autoComplete="current-password" value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} required /><div className="account-delete-actions"><button type="button" className="secondary-button" onClick={() => {setDeletingAccount(false);setDeletePassword('');}}>إلغاء</button><button className="account-delete-button" disabled={deleteBusy}>{deleteBusy ? 'جارٍ الحذف…' : 'تأكيد الحذف النهائي'}</button></div></form>}</div>}</section>}
       <footer className="site-footer">{SCHOOL}</footer></main></div></div>{toast && <div role="status" className="toast">{toast}</div>}</div>;
 }
 
