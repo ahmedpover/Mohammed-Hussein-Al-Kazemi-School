@@ -50,7 +50,20 @@ async function init() {
  CREATE TABLE IF NOT EXISTS media(id uuid PRIMARY KEY,lecture_id uuid REFERENCES lectures(id) ON DELETE CASCADE,kind text NOT NULL,mime text NOT NULL,content bytea NOT NULL,UNIQUE(lecture_id,kind)); ALTER TABLE invites ADD COLUMN IF NOT EXISTS code_hash text;`);
  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS course_number text;
  CREATE TABLE IF NOT EXISTS notifications(id uuid PRIMARY KEY,student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,sender_id uuid REFERENCES users(id) ON DELETE SET NULL,message text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),read_at timestamptz);`);
- if(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) { const email=emailKey(process.env.ADMIN_EMAIL); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || process.env.ADMIN_PASSWORD.length<12) throw new Error('ADMIN_EMAIL or ADMIN_PASSWORD invalid'); const {rows}=await query('SELECT id,role FROM users WHERE email=$1',[email]); if(rows.length && rows[0].role!=='admin') throw new Error('Admin email already belongs to a non-admin account'); if(!rows.length) { await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[id(),email,process.env.ADMIN_NAME || 'إدارة المدرسة',await hash(process.env.ADMIN_PASSWORD),'admin']); console.log('Initial administrator created'); } }
+ if(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+  const email=emailKey(process.env.ADMIN_EMAIL);
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || process.env.ADMIN_PASSWORD.length<12) throw new Error('ADMIN_EMAIL or ADMIN_PASSWORD invalid');
+  const {rows}=await query('SELECT id,role,password_hash FROM users WHERE email=$1',[email]);
+  if(rows.length && rows[0].role!=='admin') throw new Error('Admin email already belongs to a non-admin account');
+  if(!rows.length) {
+   await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[id(),email,process.env.ADMIN_NAME || 'إدارة المدرسة',await hash(process.env.ADMIN_PASSWORD),'admin']);
+   console.log('Initial administrator created');
+  } else if(!(await verify(process.env.ADMIN_PASSWORD,rows[0].password_hash))) {
+   await query('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(process.env.ADMIN_PASSWORD),rows[0].id]);
+   await query('DELETE FROM sessions WHERE user_id=$1',[rows[0].id]);
+   console.log('Administrator password synchronized with Railway variable');
+  }
+ }
 }
 app.get('/api/health',(_req,res)=>res.json({ok:true}));
 app.post('/api/auth/register',wrap(async(req,res)=>{ const email=emailKey(req.body.email), name=clean(req.body.name,70), password=req.body.password, inviteCode=String(req.body.inviteCode||'').trim(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!valid(name,70)||typeof password!=='string'||password.length<10||password.length>128) throw fail(400,'تحقق من البريد والاسم وكلمة مرور لا تقل عن ١٠ أحرف.'); try { let role='student'; if(inviteCode){const {rows}=await query('SELECT code_hash,active FROM invites WHERE email=$1',[email]);if(!rows[0]?.active||!rows[0].code_hash||digestToken(inviteCode)!==rows[0].code_hash)throw fail(403,'رمز دعوة الأستاذ غير صحيح.');role='teacher';} const userId=id(); await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[userId,email,name,await hash(password),role]); await session(res,userId); res.status(201).json({ok:true}); } catch(e){ if(e.code==='23505') throw fail(409,'البريد مسجّل مسبقًا.'); throw e; } }));
