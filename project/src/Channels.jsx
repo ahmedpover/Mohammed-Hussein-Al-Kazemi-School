@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { ArrowLeft, ArrowRight, BookOpen, Hash, ImagePlus, Plus, Search, Trash2, Users, X } from 'lucide-react';
 import './channels.css';
 

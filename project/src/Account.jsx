@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { LockKeyhole, Mail, UserRound } from 'lucide-react';
 import './account.css';
 
