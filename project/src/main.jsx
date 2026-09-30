@@ -5,3 +5,6 @@ import CloudApp from './CloudApp.jsx';
 import './style.css';
 import './formal.css';
 createRoot(document.getElementById('root')).render(location.protocol==='file:'?<App/>:<CloudApp/>);
+if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
