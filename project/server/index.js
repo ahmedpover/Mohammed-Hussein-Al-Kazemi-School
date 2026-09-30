@@ -94,6 +94,40 @@ app.get('/api/me',requireUser,wrap(async(req,res)=>{ const {id,email,name,role,s
 app.get('/api/data',requireUser,wrap(async(req,res)=>{ const user=req.actor; const [c,l,j,i,n]=await Promise.all([query('SELECT id,handle,name,subject,book,description,owner_id AS "ownerId",teacher_name AS "teacherName",created_at AS "createdAt" FROM channels ORDER BY created_at DESC'),query(`SELECT l.id,title,subject,book,description,owner_id AS "ownerId",teacher_name AS "teacherName",created_at AS "createdAt",EXISTS(SELECT 1 FROM media m WHERE m.lecture_id=l.id AND kind='audio') AS "hasAudio",EXISTS(SELECT 1 FROM media m WHERE m.lecture_id=l.id AND kind='pdf') AS "hasPdf" FROM lectures l ORDER BY created_at DESC`),query('SELECT channel_id FROM memberships WHERE user_id=$1',[user.id]),user.role==='admin'?query('SELECT email,name,subjects,active FROM invites ORDER BY name'):Promise.resolve({rows:[]}),query('SELECT id,message,created_at AS "createdAt",read_at AS "readAt" FROM notifications WHERE student_id=$1 ORDER BY created_at DESC LIMIT 100',[user.id])]); res.json({channels:c.rows,lectures:l.rows.map(x=>({...x,audioUrl:x.hasAudio?`/api/lectures/${x.id}/media/audio`:'',pdfUrl:x.hasPdf?`/api/lectures/${x.id}/media/pdf`:''})),joined:j.rows.map(x=>x.channel_id),invites:i.rows,notifications:n.rows}); }));
 app.get('/api/admin/students',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT u.id,u.name,u.email,u.course_number AS "courseNumber",u.created_at AS "createdAt",COALESCE(json_agg(DISTINCT c.subject) FILTER(WHERE c.subject IS NOT NULL),'[]'::json) AS subjects,COUNT(DISTINCT m.channel_id)::int AS "channelCount" FROM users u LEFT JOIN memberships m ON m.user_id=u.id LEFT JOIN channels c ON c.id=m.channel_id WHERE u.role='student' GROUP BY u.id ORDER BY u.created_at DESC`); res.json(rows); }));
 app.get('/api/admin/students/:id',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT id,name,email,course_number AS "courseNumber",created_at AS "createdAt" FROM users WHERE id=$1 AND role='student'`,[req.params.id]);if(!rows.length)throw fail(404,'الطالب غير موجود.');const {rows:channels}=await query(`SELECT c.id,c.name,c.subject,c.book,c.handle FROM memberships m JOIN channels c ON c.id=m.channel_id WHERE m.user_id=$1 ORDER BY c.subject,c.name`,[req.params.id]);res.json({...rows[0],channels}); }));
+async function deleteAccountRecords(client,userId){
+ await client.query('DELETE FROM posts WHERE owner_id=$1',[userId]);
+ await client.query('DELETE FROM channels WHERE owner_id=$1',[userId]);
+ await client.query('DELETE FROM lectures WHERE owner_id=$1',[userId]);
+ await client.query('DELETE FROM users WHERE id=$1',[userId]);
+}
+app.delete('/api/admin/students/:id',requireUser,wrap(async(req,res)=>{
+ admin(req);
+ const client=await pool.connect();
+ try { await client.query('BEGIN');
+  const {rows}=await client.query('SELECT id,email FROM users WHERE id=$1 AND role=$2 FOR UPDATE',[req.params.id,'student']);
+  if(!rows.length)throw fail(404,'حساب الطالب غير موجود.');
+  if(emailKey(req.body?.confirmEmail)!==rows[0].email)throw fail(400,'اكتب بريد الطالب نفسه لتأكيد الحذف.');
+  await deleteAccountRecords(client,rows[0].id);
+  await client.query('COMMIT');
+ }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ res.json({ok:true});
+}));
+app.delete('/api/admin/teachers/:email',requireUser,wrap(async(req,res)=>{
+ admin(req);
+ const email=emailKey(req.params.email);
+ if(emailKey(req.body?.confirmEmail)!==email)throw fail(400,'اكتب بريد الأستاذ نفسه لتأكيد الحذف.');
+ const client=await pool.connect();
+ try {await client.query('BEGIN');
+  const {rows:invites}=await client.query('SELECT email FROM invites WHERE email=$1 FOR UPDATE',[email]);
+  if(!invites.length)throw fail(404,'الأستاذ غير موجود في قائمة الدعوات.');
+  const {rows:users}=await client.query('SELECT id,role FROM users WHERE email=$1 FOR UPDATE',[email]);
+  if(users.length&&users[0].role!=='teacher')throw fail(409,'هذا البريد تابع لحساب آخر؛ لم يُحذف شيء.');
+  if(users.length)await deleteAccountRecords(client,users[0].id);
+  await client.query('DELETE FROM invites WHERE email=$1',[email]);
+  await client.query('COMMIT');
+ }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ res.json({ok:true});
+}));
 app.patch('/api/admin/students/:id',requireUser,wrap(async(req,res)=>{ admin(req); const value=String(req.body.courseNumber||'').trim();if(value.length>30)throw fail(400,'رقم الدورة طويل جدًا.');const {rowCount}=await query(`UPDATE users SET course_number=$1 WHERE id=$2 AND role='student'`,[value||null,req.params.id]);if(!rowCount)throw fail(404,'الطالب غير موجود.');res.json({ok:true}); }));
 app.post('/api/admin/students/:id/notifications',requireUser,wrap(async(req,res)=>{ admin(req);const message=String(req.body.message||'').trim();if(message.length<1||message.length>1000)throw fail(400,'اكتب إشعارًا من ١ إلى ١٠٠٠ حرف.');const {rowCount}=await query(`SELECT 1 FROM users WHERE id=$1 AND role='student'`,[req.params.id]);if(!rowCount)throw fail(404,'الطالب غير موجود.');await query(`INSERT INTO notifications(id,student_id,sender_id,message) VALUES($1,$2,$3,$4)`,[id(),req.params.id,req.actor.id,message]);res.status(201).json({ok:true}); }));
 app.patch('/api/notifications/:id/read',requireUser,wrap(async(req,res)=>{ const {rowCount}=await query(`UPDATE notifications SET read_at=COALESCE(read_at,now()) WHERE id=$1 AND student_id=$2`,[req.params.id,req.actor.id]);if(!rowCount)throw fail(404,'الإشعار غير موجود.');res.json({ok:true}); }));
