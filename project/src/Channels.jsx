@@ -1,3 +1,4 @@
+import { useMotionState } from './motion.js';
 import React, { useState } from 'react';
 import { ArrowLeft, ArrowRight, BookOpen, Hash, ImagePlus, Plus, Search, Trash2, Users, X } from 'lucide-react';
 import './channels.css';
@@ -6,8 +7,8 @@ const subjectName = id => ({ fiqh: 'الفقه', usul: 'أصول الفقه', aq
 const today = () => new Intl.DateTimeFormat('ar-IQ', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date());
 
 export default function Channels({ role, userId, channels, joined, allowedSubjects, onCreate, onJoin, onLeave, onPost, onDeletePost, onDeleteChannel }) {
-  const [activeId, setActiveId] = useState(null);
-  const [createOpen, setCreateOpen] = useState(false);
+  const [activeId, setActiveId] = useMotionState(null);
+  const [createOpen, setCreateOpen] = useMotionState(false);
   const [search, setSearch] = useState('');
   const [lookedUp, setLookedUp] = useState('');
   const active = channels.find(channel => channel.id === activeId);

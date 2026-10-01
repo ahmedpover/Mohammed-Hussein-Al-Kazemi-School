@@ -1,3 +1,4 @@
+import { useMotionState } from './motion.js';
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, Bell, Search, Users, Trash2 } from 'lucide-react';
 import { date } from './api.js';
@@ -5,7 +6,7 @@ import { loadStudents, loadStudent, saveCourse, sendStudentNotification, deleteS
 import './admin.css';
 
 export default function AdminStudents() {
- const [students,setStudents]=useState([]),[selected,setSelected]=useState(null),[course,setCourse]=useState(''),[message,setMessage]=useState(''),[search,setSearch]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
+ const [students,setStudents]=useState([]),[selected,setSelected]=useMotionState(null),[course,setCourse]=useState(''),[message,setMessage]=useState(''),[search,setSearch]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false);
  const refresh=async()=>setStudents(await loadStudents());
  useEffect(()=>{refresh().catch(e=>setError(e.message));},[]);
  async function open(student){setError('');setNotice('');try{const result=await loadStudent(student.id);setSelected(result);setCourse(result.courseNumber||'');setMessage('');}catch(e){setError(e.message);}}

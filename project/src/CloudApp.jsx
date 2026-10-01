@@ -1,3 +1,4 @@
+import { useMotionState } from './motion.js';
 import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, GraduationCap, LogOut, Moon, Sun, UserRound, Users, Plus, Headphones, MessagesSquare, X, Trash2, ArrowRight, FileText, Bell } from 'lucide-react';
 import { me, logout, deleteAccount, date } from './api.js';
@@ -14,7 +15,7 @@ export default function CloudApp() {
   const [user, setUser] = useState(undefined);
   const [identity, setIdentity] = useState(null);
   const [error, setError] = useState('');
-  const [page, setPage] = useState('home');
+  const [page, setPage] = useMotionState('home');
   const [channels, setChannels] = useState([]);
   const [posts, setPosts] = useState({});
   const [joined, setJoined] = useState([]);
@@ -22,10 +23,10 @@ export default function CloudApp() {
   const [invites, setInvites] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [dark, setDark] = useState(() => { try { return localStorage.getItem('hawza-cloud-dark') === '1'; } catch { return false; } });
-  const [editingLecture, setEditingLecture] = useState(undefined);
-  const [selectedLecture, setSelectedLecture] = useState(null);
+  const [editingLecture, setEditingLecture] = useMotionState(undefined);
+  const [selectedLecture, setSelectedLecture] = useMotionState(null);
   const [toast, setToast] = useState('');
-  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useMotionState(false);
   const [deletePassword, setDeletePassword] = useState('');
   const [deleteBusy, setDeleteBusy] = useState(false);
 
@@ -74,7 +75,7 @@ export default function CloudApp() {
 function Brand() { return <div className="brand"><div className="brand-icon"><BookOpen size={22} /></div><div><strong>مدرسة الشيخ محمد حسين</strong><span>الكاظمي</span></div></div>; }
 
 function TeacherManagement({ invites, onSave, onDelete }) {
-  const [editing, setEditing] = useState(null);
+  const [editing, setEditing] = useMotionState(null);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [subjects, setSubjects] = useState('');
