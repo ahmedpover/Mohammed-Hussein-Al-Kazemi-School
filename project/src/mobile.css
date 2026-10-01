@@ -45,10 +45,24 @@
  .app .lecture-row .row-action{padding:10px 16px;border:1px solid var(--line);border-radius:4px}
  .app .cloud-files{display:grid;grid-template-columns:minmax(0,1fr);gap:18px}
  .app form,.app label{min-width:0}
+ .app :is(.cloud-admin,.admin-students,.lecture-stack,.channel-feed,.channel-results){min-width:0}
+ .app :is(.cloud-admin,.admin-students,.channel-feed,.channel-results){grid-template-columns:minmax(0,1fr)}
+ .app .brand strong,.app .brand span{white-space:normal}
+ .app .channel-card code,.app .channel-cover code{max-width:100%}
+ .app .modal-head>div{min-width:0}
+ .app .modal-head>.icon-button{flex-shrink:0}
  .app .cloud-files input{width:100%;font-size:14px}
  .app .modal-actions{flex-wrap:wrap}
  .app .modal-actions>button{flex:1 1 110px}
  .app .modal{max-height:calc(100dvh - 32px);padding:18px}
+ .app .channels-area{grid-template-columns:minmax(0,1fr);min-width:0}
+ .app .channels-area>*{min-width:0}
+ .app .channels-intro{flex-direction:column;align-items:stretch}
+ .app .channels-intro>div{min-width:0}
+ .app .channel-search{width:100%;grid-template-columns:minmax(0,1fr)}
+ .app .channel-search>div{display:grid;grid-template-columns:20px minmax(0,1fr);gap:10px;min-width:0}
+ .app .channel-search input{width:100%;min-width:0}
+ .app .channel-search button{grid-column:1 / -1;width:100%;min-width:0}
  .app .channel-grid{grid-template-columns:minmax(0,1fr)}
  .app .channel-cover{align-items:flex-start;padding:18px;gap:12px}
  .app .channel-cover>div{min-width:0}
@@ -68,9 +82,6 @@
 @media(max-width:380px){
  .cloud-app .main-content{padding-inline:12px}
  .app :is(.section-block,.account-card,.channel-search,.channel-post){padding:14px}
- .app .channel-search>div{flex-wrap:wrap}
- .app .channel-search input{flex:1 1 180px}
- .app .channel-search button{width:100%}
  .app .channel-emblem{display:none}
 }
 @keyframes mobile-menu-fade{from{opacity:0}to{opacity:1}}
