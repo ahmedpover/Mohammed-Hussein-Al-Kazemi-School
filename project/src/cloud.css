@@ -8,3 +8,13 @@
 .cloud-invite-form textarea,.cloud-lecture-form textarea{min-height:78px;resize:vertical}.cloud-invite-form .cloud-check{display:flex;align-items:center;gap:9px}.cloud-check input{accent-color:var(--teal)}.cloud-invite-form>.form-note{margin-top:18px}
 .cloud-lecture-form{background:var(--surface-soft);border:1px solid var(--line);padding:18px;margin:18px 0}.cloud-files{display:flex;flex-wrap:wrap;gap:14px}.cloud-files input{max-width:100%;font-size:12px}.cloud-lecture-view audio{display:block;width:100%;margin:22px 0}.cloud-lecture-view h2{font-size:30px}.cloud-lecture-view>p{line-height:2}.cloud-lecture-view .outline-button{margin-top:25px;display:inline-flex}.cloud-auth-actions{display:flex;flex-wrap:wrap;gap:10px}.cloud-forgot{margin:15px 0}
 @media(max-width:800px){.cloud-app .sidebar{min-height:0;height:auto;position:static;transform:none;width:100%;padding:18px;box-shadow:none}.cloud-app .sidebar .side-nav{display:flex;overflow-x:auto;gap:6px}.cloud-app .sidebar .side-link{flex:none}.cloud-app .sidebar-bottom,.cloud-app .sidebar-head{display:none}.cloud-app .workspace{display:block}.cloud-app .content-wrap{width:100%}.cloud-shortcuts{grid-template-columns:1fr}}
+:root{view-transition-name:none}
+.cloud-app .main-content,.entry-content{view-transition-name:school-content}
+::view-transition-group(school-content){animation:none}
+::view-transition-image-pair(school-content){isolation:isolate}
+::view-transition-old(school-content),::view-transition-new(school-content){mix-blend-mode:normal;height:auto}
+::view-transition-old(school-content){animation:school-fade-out 180ms ease-out both}
+::view-transition-new(school-content){animation:school-fade-in 240ms cubic-bezier(.2,0,.2,1) both}
+@keyframes school-fade-out{from{opacity:1}to{opacity:0}}
+@keyframes school-fade-in{from{opacity:0}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){::view-transition-old(school-content),::view-transition-new(school-content){animation:none}}

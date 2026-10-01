@@ -22,14 +22,22 @@ function smoothUpdate(update) {
     let activeAnimation;
     try {
       while (state.queue.length && region.isConnected) {
-        const exit = region.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(3px)' }], { duration: 80, easing: 'ease-out', fill: 'forwards' });
+        if (document.startViewTransition) {
+          const transition = document.startViewTransition(() => {
+            const pending = state.queue.splice(0);
+            flushSync(() => pending.forEach(action => action()));
+          });
+          await transition.finished;
+          continue;
+        }
+        const exit = region.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 70, easing: 'ease-in', fill: 'forwards' });
         activeAnimation = exit;
         await exit.finished;
         const pending = state.queue.splice(0);
         flushSync(() => pending.forEach(action => action()));
         exit.cancel();
         if (!region.isConnected) break;
-        const enter = region.animate([{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 160, easing: 'ease-out' });
+        const enter = region.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: 'cubic-bezier(.2,0,.2,1)' });
         activeAnimation = enter;
         await enter.finished;
       }
