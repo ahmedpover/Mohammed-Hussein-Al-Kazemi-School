@@ -1,17 +1,18 @@
 import { useMotionState } from './motion.js';
 import React, { useState } from 'react';
-import { ArrowLeft, ArrowRight, BookOpen, Hash, ImagePlus, Plus, Search, Trash2, Users, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BookOpen, FileText, Hash, Headphones, ImagePlus, Plus, Search, Trash2, Users, X } from 'lucide-react';
 import './channels.css';
 
 const subjectName = id => ({ fiqh: 'الفقه', usul: 'أصول الفقه', aqida: 'العقائد' })[id] || id || 'مادة غير محددة';
 const today = () => new Intl.DateTimeFormat('ar-IQ', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date());
 
-export default function Channels({ role, userId, channels, joined, allowedSubjects, onCreate, onJoin, onLeave, onPost, onDeletePost, onDeleteChannel }) {
+export default function Channels({ role, userId, channels, lectures = [], joined, allowedSubjects, onCreate, onJoin, onLeave, onPost, onDeletePost, onDeleteChannel, onOpenLecture }) {
   const [activeId, setActiveId] = useMotionState(null);
   const [createOpen, setCreateOpen] = useMotionState(false);
   const [search, setSearch] = useState('');
   const [lookedUp, setLookedUp] = useState('');
   const active = channels.find(channel => channel.id === activeId);
+  const activeLectures = lectures.filter(lecture => lecture.channelId === activeId);
   const isTeacher = role === 'teacher';
   const isAdmin = role === 'admin';
   const found = lookedUp ? channels.find(channel => channel.handle === lookedUp) : null;
@@ -28,6 +29,10 @@ export default function Channels({ role, userId, channels, joined, allowedSubjec
       <div className="channel-cover"><div className="channel-emblem"><BookOpen size={26} /></div><div><span>{subjectName(active.subject)} · {active.book || 'لم يُذكر الكتاب'}</span><h3>{active.name}</h3><p>{active.description || 'قناة المادة التعليمية'}</p><code dir="ltr">@{active.handle}</code></div></div>
       {!isTeacher && !isAdmin && !joined.includes(active.id) ? <div className="channel-join-required"><p>انضم إلى القناة للاطلاع على منشوراتها.</p><button className="primary-button" onClick={() => onJoin(active.id)}>الانضمام للقناة</button></div> : <>
         <div className="channel-detail-actions">{isTeacher || isAdmin ? <button className="text-button danger-text" onClick={async () => { try { if (await onDeleteChannel(active)) setActiveId(null); } catch { /* The parent displays the error. */ } }}>حذف القناة <Trash2 size={16} /></button> : <button className="text-button" onClick={() => { onLeave(active.id); setActiveId(null); }}>مغادرة القناة</button>}</div>
+        <section className="channel-lectures-section">
+          <div className="channel-posts-head"><h3><Headphones size={19} /> محاضرات القناة</h3><span>{activeLectures.length} محاضرات</span></div>
+          {activeLectures.length ? <div className="lecture-stack">{activeLectures.map(lecture => <article className="lecture-row" key={lecture.id}><div className="round-icon mint"><Headphones size={20} /></div><button className="lecture-main" onClick={() => onOpenLecture?.(lecture.id)}><strong>{lecture.title}</strong><span>{lecture.book} · {lecture.date}</span></button><span className="channel-lecture-files">{lecture.audioUrl ? <Headphones size={16} aria-label="يتضمن تسجيلاً صوتيًا" /> : null}{lecture.pdfUrl ? <FileText size={16} aria-label="يتضمن ملف PDF" /> : null}</span></article>)}</div> : <div className="channel-empty"><Headphones size={23} /><p>لا توجد محاضرات منشورة في هذه القناة بعد.</p></div>}
+        </section>
         {isTeacher && <PostComposer key={active.id} channel={active} onPost={onPost} />}
         <div className="channel-posts-head"><h3>المنشورات</h3><span>{active.posts?.length || 0} منشورات</span></div>
         {(active.posts || []).length ? <div className="channel-feed">{active.posts.map(post => <article className="channel-post" key={post.id}><div className="channel-post-top"><div className="channel-post-avatar"><BookOpen size={17} /></div><div><strong>{active.teacherName || 'أستاذ المادة'}</strong><small>{post.date}</small></div>{(isTeacher || isAdmin) && <button className="channel-delete" aria-label="حذف المنشور" onClick={() => onDeletePost(active.id, post.id)}><Trash2 size={17} /></button>}</div>{post.text && <p>{post.text}</p>}{post.imageUrl && <img src={post.imageUrl} alt={post.text ? `صورة مرفقة بالمنشور: ${post.text.slice(0, 80)}` : 'صورة مرفقة بمنشور الأستاذ'} loading="lazy" />}{post.imageName && !post.imageUrl && <div className="channel-image-missing">هذه الصورة غير متاحة في هذا المتصفح.</div>}</article>)}</div> : <div className="channel-empty"><ImagePlus size={25} /><p>لم يُنشر شيء في هذه القناة بعد.</p></div>}

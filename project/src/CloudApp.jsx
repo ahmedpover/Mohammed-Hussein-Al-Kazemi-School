@@ -43,7 +43,8 @@ export default function CloudApp() {
   const role = identity?.role;
   const isTeacher = role === 'teacher';
   const mine = lectures.filter(item => item.ownerId === user?.id);
-  const listed = isTeacher ? mine : lectures;
+  const teacherChannels = channels.filter(item => item.ownerId === user?.id);
+  const listed = isTeacher ? mine : role === 'student' ? lectures.filter(item => item.channelId && joined.includes(item.channelId)) : lectures;
   const displayChannels = channels.map(channel => ({ ...channel, posts: posts[channel.id] || [] }));
   const unread = notifications.filter(item => !item.readAt).length;
 
@@ -61,14 +62,14 @@ export default function CloudApp() {
       {page === 'home' && <><div className="welcome-banner"><div><span className="welcome-kicker">مرحبًا، {identity.name}</span><h3>{role === 'admin' ? 'لوحة إدارة المدرسة' : role === 'teacher' ? 'موادك ومحاضراتك' : 'تابع موادك وقنواتك'}</h3><p>{role === 'admin' ? 'تابع الطلاب والأساتذة والقنوات والمحاضرات من حساب الإدارة.' : role === 'teacher' ? 'انشر الدروس والقنوات في المواد التي اعتمدتها الإدارة.' : 'ابحث عن قناة أستاذك واطلع على المحاضرات المنشورة.'}</p><button onClick={() => setPage(role === 'admin' ? 'teachers' : role === 'teacher' ? 'lectures' : 'channels')}>{role === 'admin' ? 'إدارة الأساتذة' : role === 'teacher' ? 'محاضراتي' : 'قنوات المواد'}</button></div><div className="arch-motif" aria-hidden="true"><GraduationCap size={48} /></div></div>{role === 'teacher' && <p className="scope-note">المواد المعتمدة لك: {identity.subjects.join('، ') || 'لا توجد مادة مخصصة بعد'}</p>}<div className="cloud-shortcuts">{(role === 'admin' ? [['الأساتذة', 'teachers', Users], ['الطلاب', 'students', GraduationCap], ['القنوات', 'channels', MessagesSquare], ['المحاضرات', 'lectures', Headphones]] : [['قنوات المواد', 'channels', MessagesSquare], ['المحاضرات', 'lectures', Headphones]]).map(([name, id, Icon]) => <button key={id} onClick={() => setPage(id)} className="channel-home-link"><Icon size={24} /><strong>{name}</strong></button>)}</div></>}
       {page === 'teachers' && role === 'admin' && <TeacherManagement invites={invites} onSave={data => attempt(() => saveInvite(data), 'حُفظت بيانات الأستاذ')} onDelete={email => attempt(() => deleteTeacher(email,email), 'حُذف حساب الأستاذ ودعوته')} />}
       {page === 'students' && role === 'admin' && <AdminStudents />}
-      {page === 'channels' && <Channels role={role} userId={user.id} channels={displayChannels} joined={joined} allowedSubjects={isTeacher ? identity.subjects : undefined}
+      {page === 'channels' && <Channels role={role} userId={user.id} channels={displayChannels} lectures={lectures} joined={joined} allowedSubjects={isTeacher ? identity.subjects : undefined} onOpenLecture={lectureId => { setSelectedLecture(lectureId); setPage('lectures'); }}
         onCreate={data => attempt(() => createChannel(user, data, identity.name), 'أُنشئت القناة')}
         onJoin={id => attempt(() => joinChannel(user.id, id), 'انضممت إلى القناة').catch(() => {})}
         onLeave={id => attempt(() => leaveChannel(user.id, id), 'غادرت القناة').catch(() => {})}
         onPost={(id, post) => attempt(() => createPost(user, id, post), 'نُشر المنشور')}
         onDeletePost={(id, postId) => { const post = (posts[id] || []).find(item => item.id === postId); if (post && window.confirm('حذف هذا المنشور؟')) attempt(() => removePost(id, post), 'حُذف المنشور').catch(() => {}); }}
         onDeleteChannel={async channel => { if (!window.confirm(`حذف قناة «${channel.name}» ومنشوراتها؟`)) return false; await attempt(() => removeChannel(channel), 'حُذفت القناة'); return true; }} />}
-      {page === 'lectures' && (selectedLecture ? <LectureView lecture={lectures.find(item => item.id === selectedLecture) || selectedLecture} onBack={() => setSelectedLecture(null)} /> : <section className="section-block cloud-lectures"><div className="section-head"><div><h3>{isTeacher ? 'محاضراتي' : 'المواد والمحاضرات'}</h3><p>{listed.length} محاضرات</p></div>{isTeacher && <button className="primary-button" onClick={() => setEditingLecture(null)}><Plus size={17} /> إضافة محاضرة</button>}</div>{isTeacher && editingLecture !== undefined && <LectureForm initial={editingLecture} subjects={identity.subjects} onCancel={() => setEditingLecture(undefined)} onSave={async data => { await attempt(() => saveLecture(user, data, editingLecture, identity.name), 'حُفظت المحاضرة'); setEditingLecture(undefined); }} />}{listed.length ? <div className="lecture-stack">{listed.map(item => <article className="lecture-row" key={item.id}><div className="round-icon mint"><BookOpen size={21} /></div><button className="lecture-main" onClick={() => setSelectedLecture(item.id)}><strong>{item.title}</strong><span>{item.subject} · {item.book} · {item.date}</span></button>{isTeacher && <><button className="row-action" onClick={() => setEditingLecture(item)}>تعديل</button><button className="row-action danger-text" onClick={() => { if (window.confirm('حذف هذه المحاضرة؟')) attempt(() => removeLecture(item), 'حُذفت المحاضرة').catch(() => {}); }} aria-label="حذف المحاضرة"><Trash2 size={16} /></button></>}</article>)}</div> : <p className="quiet-empty">لا توجد محاضرات منشورة بعد.</p>}</section>)}
+      {page === 'lectures' && (selectedLecture ? <LectureView lecture={lectures.find(item => item.id === selectedLecture) || selectedLecture} onBack={() => setSelectedLecture(null)} /> : <section className="section-block cloud-lectures"><div className="section-head"><div><h3>{isTeacher ? 'محاضراتي' : 'المواد والمحاضرات'}</h3><p>{listed.length} محاضرات</p></div>{isTeacher && <button className="primary-button" onClick={() => { if (!teacherChannels.length) { setPage('channels'); say('أنشئ قناة أولاً، ثم اخترها عند نشر المحاضرة.'); return; } setEditingLecture(null); }}><Plus size={17} /> إضافة محاضرة</button>}</div>{isTeacher && editingLecture !== undefined && <LectureForm initial={editingLecture} channels={teacherChannels} onCancel={() => setEditingLecture(undefined)} onSave={async data => { await attempt(() => saveLecture(user, data, editingLecture, identity.name), 'حُفظت المحاضرة'); setEditingLecture(undefined); }} />}{listed.length ? <div className="lecture-stack">{listed.map(item => <article className="lecture-row" key={item.id}><div className="round-icon mint"><BookOpen size={21} /></div><button className="lecture-main" onClick={() => setSelectedLecture(item.id)}><strong>{item.title}</strong><span>{item.channelName ? `${item.channelName} · ` : ''}{item.subject} · {item.book} · {item.date}</span></button>{isTeacher && <><button className="row-action" onClick={() => setEditingLecture(item)}>تعديل</button><button className="row-action danger-text" onClick={() => { if (window.confirm('حذف هذه المحاضرة؟')) attempt(() => removeLecture(item), 'حُذفت المحاضرة').catch(() => {}); }} aria-label="حذف المحاضرة"><Trash2 size={16} /></button></>}</article>)}</div> : <p className="quiet-empty">لا توجد محاضرات منشورة بعد.</p>}</section>)}
       {page === 'notifications' && role === 'student' && <Notifications items={notifications} onRefresh={refresh} />}
       {page === 'account' && <section className="account-card"><span className="overline">حساب المدرسة</span><h3>{identity.name}</h3><p>{role === 'admin' ? 'مدير المدرسة' : role === 'teacher' ? 'أستاذ معتمد' : 'طالب'}</p><p dir="ltr">{user.email}</p>{isTeacher && <p className="account-notice">المواد المعتمدة: {identity.subjects.join('، ')}</p>}<button className="secondary-button" onClick={signOut}>تسجيل الخروج</button>{role !== 'admin' && <div className="account-delete"><h4>حذف الحساب نهائيًا</h4><p>{isTeacher ? 'سيُحذف حسابك وقنواتك ومنشوراتها ومحاضراتك وملفاتها ورمز دعوتك.' : 'سيُحذف حسابك وعضوياتك بالقنوات وإشعاراتك ورقم دورتك.'} لا يمكن التراجع عن الحذف.</p>{!deletingAccount ? <button type="button" className="account-delete-button" onClick={() => setDeletingAccount(true)}>حذف حسابي</button> : <form onSubmit={removeMyAccount}><label htmlFor="delete-account-password">أدخل كلمة المرور للتأكيد</label><input id="delete-account-password" type="password" autoComplete="current-password" value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} required /><div className="account-delete-actions"><button type="button" className="secondary-button" onClick={() => {setDeletingAccount(false);setDeletePassword('');}}>إلغاء</button><button className="account-delete-button" disabled={deleteBusy}>{deleteBusy ? 'جارٍ الحذف…' : 'تأكيد الحذف النهائي'}</button></div></form>}</div>}</section>}
       <footer className="site-footer">{SCHOOL}</footer></main></div></div>{toast && <div role="status" className="toast">{toast}</div>}</div>;
@@ -94,19 +95,47 @@ function TeacherManagement({ invites, onSave, onDelete }) {
   </div>;
 }
 
-function LectureForm({ initial, subjects, onSave, onCancel }) {
+function LectureForm({ initial, channels, onSave, onCancel }) {
   const [title, setTitle] = useState(initial?.title || '');
-  const [subject, setSubject] = useState(initial?.subject || subjects[0] || '');
+  // Existing lectures without a channel stay editable, but must be assigned before saving.
+  const [channelId, setChannelId] = useState(initial?.channelId || '');
   const [book, setBook] = useState(initial?.book || '');
   const [description, setDescription] = useState(initial?.description || '');
   const [audio, setAudio] = useState(null);
   const [pdf, setPdf] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  async function submit(e) { e.preventDefault(); setError(''); if(audio?.size>100*1024*1024){setError('التسجيل الصوتي يجب ألا يتجاوز ١٠٠ ميغابايت.');return;} if(pdf?.size>25*1024*1024){setError('ملف PDF يجب ألا يتجاوز ٢٥ ميغابايت.');return;} setBusy(true); try { await onSave({ title, subject, book, description, audio, pdf }); } catch (cause) { setError(cause.message || 'تعذر حفظ المحاضرة.'); } finally { setBusy(false); } }
-  return <form className="cloud-lecture-form" onSubmit={submit}><label>عنوان المحاضرة<input value={title} onChange={e => setTitle(e.target.value)} required maxLength="100" /></label><label>المادة<select value={subject} onChange={e => setSubject(e.target.value)} required disabled={Boolean(initial)}>{subjects.map(item => <option key={item}>{item}</option>)}</select></label><label>الكتاب<input value={book} onChange={e => setBook(e.target.value)} required maxLength="100" /></label><label>وصف مختصر<textarea value={description} onChange={e => setDescription(e.target.value)} maxLength="500" /></label><div className="cloud-files"><label>تسجيل صوتي (حتى ١٠٠ ميغابايت) <input type="file" accept="audio/*" onChange={e => setAudio(e.target.files[0] || null)} /></label><label>ملف PDF <input type="file" accept="application/pdf" onChange={e => setPdf(e.target.files[0] || null)} /></label></div>{error && <p role="alert" className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>إلغاء</button><button className="primary-button" disabled={busy || !subjects.length}>{busy ? 'جارٍ الحفظ…' : 'حفظ المحاضرة'}</button></div></form>;
+  const selectedChannel = channels.find(item => item.id === channelId);
+  function changeChannel(value) {
+    setChannelId(value);
+    const channel = channels.find(item => item.id === value);
+    if (channel) setBook(channel.book || '');
+  }
+  async function submit(e) {
+    e.preventDefault(); setError('');
+    if (!channelId || !selectedChannel) { setError('اختر القناة التي ستُنشر فيها المحاضرة.'); return; }
+    if(audio?.size>100*1024*1024){setError('التسجيل الصوتي يجب ألا يتجاوز ١٠٠ ميغابايت.');return;}
+    if(pdf?.size>25*1024*1024){setError('ملف PDF يجب ألا يتجاوز ٢٥ ميغابايت.');return;}
+    setBusy(true);
+    try { await onSave({ title, channelId, book, description, audio, pdf }); }
+    catch (cause) { setError(cause.message || 'تعذر حفظ المحاضرة.'); }
+    finally { setBusy(false); }
+  }
+  return <form className="cloud-lecture-form" onSubmit={submit}>
+    <label>عنوان المحاضرة<input value={title} onChange={e => setTitle(e.target.value)} required maxLength="100" /></label>
+    <label>القناة التي ستُنشر فيها<select value={channelId} onChange={e => changeChannel(e.target.value)} required>
+      <option value="">اختر قناة…</option>{channels.map(item => <option key={item.id} value={item.id}>{item.name} — {item.subject}</option>)}
+    </select></label>
+    {selectedChannel && <p className="scope-note">ستظهر هذه المحاضرة لطلاب قناة «{selectedChannel.name}» المنضمّين إليها فقط. المادة: {selectedChannel.subject}.</p>}
+    {!channels.length && <p className="form-note">لا توجد قناة لديك بعد. أنشئ قناة أولاً من صفحة «قنوات المواد».</p>}
+    <label>الكتاب<input value={book} onChange={e => setBook(e.target.value)} required maxLength="100" /></label>
+    <label>وصف مختصر<textarea value={description} onChange={e => setDescription(e.target.value)} maxLength="500" /></label>
+    <div className="cloud-files"><label>تسجيل صوتي (حتى ١٠٠ ميغابايت) <input type="file" accept="audio/*" onChange={e => setAudio(e.target.files[0] || null)} /></label><label>ملف PDF <input type="file" accept="application/pdf" onChange={e => setPdf(e.target.files[0] || null)} /></label></div>
+    {error && <p role="alert" className="form-error">{error}</p>}
+    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onCancel}>إلغاء</button><button className="primary-button" disabled={busy || !channels.length}>{busy ? 'جارٍ الحفظ…' : 'حفظ المحاضرة'}</button></div>
+  </form>;
 }
 
 function LectureView({ lecture, onBack }) {
-  return <section className="section-block cloud-lecture-view"><button className="back-button" onClick={onBack}><ArrowRight size={18} /> المحاضرات</button><span className="overline">{lecture.subject} · {lecture.book}</span><h2>{lecture.title}</h2><p>{lecture.description}</p><span className="scope-note">{lecture.teacherName} · {lecture.date || formatDate(lecture.createdAt)}</span>{lecture.audioUrl && <audio controls preload="metadata" src={lecture.audioUrl} />}{lecture.pdfUrl && <a className="outline-button" href={lecture.pdfUrl} target="_blank" rel="noreferrer"><FileText size={18} /> عرض ملف PDF</a>}{!lecture.audioUrl && !lecture.pdfUrl && <p className="quiet-empty">لم تُرفق ملفات بهذه المحاضرة.</p>}</section>;
+  return <section className="section-block cloud-lecture-view"><button className="back-button" onClick={onBack}><ArrowRight size={18} /> المحاضرات</button><span className="overline">{lecture.subject} · {lecture.book}</span><h2>{lecture.title}</h2><p>{lecture.description}</p><span className="scope-note">{lecture.teacherName} · {lecture.channelName ? `قناة ${lecture.channelName} · ` : ''}{lecture.date || formatDate(lecture.createdAt)}</span>{lecture.audioUrl && <audio controls preload="metadata" src={lecture.audioUrl} />}{lecture.pdfUrl && <a className="outline-button" href={lecture.pdfUrl} target="_blank" rel="noreferrer"><FileText size={18} /> عرض ملف PDF</a>}{!lecture.audioUrl && !lecture.pdfUrl && <p className="quiet-empty">لم تُرفق ملفات بهذه المحاضرة.</p>}</section>;
 }

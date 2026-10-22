@@ -61,3 +61,5 @@
 .channel-modal label small{font-size:11px;color:var(--muted);font-weight:400;margin-right:5px}
 @media(max-width:700px){.channel-grid{grid-template-columns:1fr}.channels-intro{align-items:stretch;flex-direction:column}.channels-intro .primary-button{align-self:flex-start}}
 @media(max-width:620px){.channels-intro,.channel-card,.channel-search,.channel-post,.channel-composer,.channel-empty,.channel-join-required{padding:17px}.channels-intro h3{font-size:25px}.channel-cover{padding:18px;gap:12px}.channel-cover h3{font-size:27px}.channel-emblem{width:50px;height:50px}.channel-search>div{gap:7px}.channel-search button{padding:8px 11px}.channel-composer-bottom{align-items:stretch;flex-direction:column}.channel-file-button{max-width:100%;min-height:38px}.channel-composer-bottom>.primary-button{width:100%}}
+
+.channel-lectures-section{margin:22px 0 28px}.channel-lectures-section .channel-posts-head h3{display:flex;align-items:center;gap:8px}.channel-lecture-files{display:flex;align-items:center;gap:8px;color:var(--muted);padding-inline:10px}.channel-lecture-files svg{flex:none}

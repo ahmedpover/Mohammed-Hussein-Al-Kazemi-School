@@ -18,3 +18,10 @@ export async function createPost(_user,id,{text,image}) { const body=new FormDat
 export const removePost=(_id,post)=>api(`/posts/${post.id}`,{method:'DELETE'});
 export async function saveLecture(_user,payload,current){const {audio,pdf,...details}=payload;const result=current?await json(`/lectures/${current.id}`,'PUT',details):await json('/lectures','POST',details);const id=current?.id||result.id;for(const [kind,file] of [['audio',audio],['pdf',pdf]])if(file){const body=new FormData();body.set('file',file);await api(`/lectures/${id}/media/${kind}`,{method:'POST',body});}return id;}
 export const removeLecture=item=>api(`/lectures/${item.id}`,{method:'DELETE'});
+export const loadStudentGroups=()=>api('/admin/student-groups');
+export const createStudentGroup=name=>json('/admin/student-groups','POST',{name});
+export const loadUnassignedStudents=()=>api('/admin/student-groups/unassigned');
+export const loadGroupStudents=id=>api(`/admin/student-groups/${id}/students`);
+export const addStudentsToGroup=(id,studentIds)=>json(`/admin/student-groups/${id}/members`,'POST',{studentIds});
+export const removeStudentFromGroup=(groupId,studentId)=>api(`/admin/student-groups/${groupId}/members/${studentId}`,{method:'DELETE'});
+export const deleteStudentGroup=id=>api(`/admin/student-groups/${id}`,{method:'DELETE'});
