@@ -1,56 +1,93 @@
 import { useCallback, useState } from 'react';
 import { flushSync } from 'react-dom';
 
-// Batch simultaneous navigation updates so opening a page and resetting its
-// selection share one short transition. Form fields and data refreshes stay instant.
+// One gesture can change several React states (for example: page + selected
+// lecture). Commit them in the SAME view transition instead of showing a
+// blank frame or playing two sequential animations.
 const transitions = new WeakMap();
+const EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+
+function commit(updates) {
+  flushSync(() => {
+    updates.forEach(update => update());
+  });
+}
+
 function smoothUpdate(update) {
   const region = document.querySelector('.cloud-app .main-content, .entry-content');
-  if (!region || !region.animate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (!region || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
     update();
     return;
   }
+
   let state = transitions.get(region);
   if (!state) {
-    state = { queue: [], running: false };
+    state = { pending: [], running: false, scheduled: false, active: null };
     transitions.set(region, state);
   }
-  state.queue.push(update);
-  if (state.running) return;
-  state.running = true;
-  const run = async () => {
-    let activeAnimation;
+  state.pending.push(update);
+
+  // Rapid taps should not force users to watch an outdated transition.
+  if (state.running) {
+    state.active?.skipTransition?.();
+    state.active?.cancel?.();
+    return;
+  }
+  if (state.scheduled) return;
+  state.scheduled = true;
+
+  // Defer until the current click handler completes, collecting all its updates.
+  queueMicrotask(async () => {
+    state.scheduled = false;
+    if (state.running) return;
+    state.running = true;
     try {
-      while (state.queue.length && region.isConnected) {
-        if (document.startViewTransition) {
-          const transition = document.startViewTransition(() => {
-            const pending = state.queue.splice(0);
-            flushSync(() => pending.forEach(action => action()));
-          });
-          await transition.finished;
+      while (state.pending.length) {
+        const updates = state.pending.splice(0);
+        if (!region.isConnected || document.hidden) {
+          commit(updates);
           continue;
         }
-        const exit = region.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 70, easing: 'ease-in', fill: 'forwards' });
-        activeAnimation = exit;
-        await exit.finished;
-        const pending = state.queue.splice(0);
-        flushSync(() => pending.forEach(action => action()));
-        exit.cancel();
-        if (!region.isConnected) break;
-        const enter = region.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200, easing: 'cubic-bezier(.2,0,.2,1)' });
-        activeAnimation = enter;
-        await enter.finished;
+
+        if (typeof document.startViewTransition === 'function') {
+          // The browser keeps the old view visible while it draws the new view.
+          let committed = false;
+          try {
+            const transition = document.startViewTransition(() => {
+              committed = true;
+              commit(updates);
+            });
+            state.active = transition;
+            await transition.finished;
+          } catch {
+            // A skipped/failed browser transition must never lose a click.
+            if (!committed) commit(updates);
+          }
+        } else {
+          // Older browsers: never fade the existing page to zero BEFORE updating.
+          // Show the new content immediately, then give it a subtle entrance.
+          commit(updates);
+          if (region.isConnected && typeof region.animate === 'function') {
+            const animation = region.animate(
+              [
+                { opacity: 0.94, transform: 'translateY(7px)' },
+                { opacity: 1, transform: 'translateY(0)' },
+              ],
+              { duration: 220, easing: EASING }
+            );
+            state.active = animation;
+            try { await animation.finished; } catch { /* Interrupted by another tap. */ }
+          }
+        }
+        state.active = null;
       }
-    } catch {
-      // Navigation can remove a region before its animation finishes.
     } finally {
-      activeAnimation?.cancel();
-      // Apply any last update even if navigation removed the animated region.
-      state.queue.splice(0).forEach(action => action());
+      state.active = null;
       state.running = false;
+      // Protect queued updates if a browser aborts a transition unexpectedly.
+      if (state.pending.length) commit(state.pending.splice(0));
     }
-  };
-  void run();
+  });
 }
 
 export function useMotionState(initial) {
