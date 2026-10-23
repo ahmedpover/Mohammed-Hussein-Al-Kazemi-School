@@ -1,0 +1,205 @@
+import { getPushPublicKey, validSubscription, sendWebPush } from './web-push.js';
+import { sendMedia } from './media-response.js';
+import express from 'express';
+import pg from 'pg';
+import multer from 'multer';
+import helmet from 'helmet';
+import { rateLimit } from 'express-rate-limit';
+import { randomBytes, randomUUID, scrypt as rawScrypt, timingSafeEqual, createHash } from 'node:crypto';
+import { promisify } from 'node:util';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const scrypt = promisify(rawScrypt);
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : undefined });
+const app = express();
+app.disable('x-powered-by');
+// Railway terminates HTTPS at its proxy and forwards the original scheme.
+app.set('trust proxy', 1);
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(express.json({ limit: '32kb' }));
+const id = () => randomUUID();
+const fail = (status, message) => Object.assign(new Error(message), { status });
+const emailKey = value => String(value || '').trim().toLowerCase();
+const clean = (value, max) => String(value || '').trim().slice(0, max + 1);
+const valid = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.trim().length <= max;
+const hash = async password => { const salt = randomBytes(16).toString('hex'); return `${salt}:${(await scrypt(password, salt, 64)).toString('hex')}`; };
+const verify = async (password, stored) => { const [salt, digest] = stored.split(':'); const actual = await scrypt(password, salt, 64); const expected = Buffer.from(digest, 'hex'); return actual.length === expected.length && timingSafeEqual(actual, expected); };
+const digestToken = token => createHash('sha256').update(token).digest('hex');
+const query = (sql, args=[]) => pool.query(sql,args);
+const wrap = handler => async (req,res,next) => { try { await handler(req,res,next); } catch (error) { next(error); } };
+const authLimit = rateLimit({ windowMs: 15*60*1000, limit: 12, standardHeaders: 'draft-7', legacyHeaders: false });
+app.use('/api/auth/login', authLimit);
+app.use('/api/auth/register', authLimit);
+app.use('/api/auth', (req,res,next) => { if (req.method !== 'GET') { const origin=req.get('origin'); if (origin && origin !== `${req.protocol}://${req.get('host')}` && origin !== process.env.PUBLIC_ORIGIN) return next(fail(403,'مصدر الطلب غير مسموح.')); } next(); });
+app.use('/api', (req,res,next) => { if (req.method !== 'GET' && req.method !== 'HEAD') { const origin=req.get('origin'); if (origin && origin !== `${req.protocol}://${req.get('host')}` && origin !== process.env.PUBLIC_ORIGIN) return next(fail(403,'مصدر الطلب غير مسموح.')); } next(); });
+function cookie(req) { return String(req.headers.cookie || '').split(';').map(v=>v.trim()).find(v=>v.startsWith('school_session='))?.slice(15); }
+async function actor(req) { const token=cookie(req); if (!token) return null; const {rows}=await query(`SELECT u.id,u.email,u.name,u.role,i.name AS invited_name,i.subjects,i.active FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN invites i ON i.email=u.email WHERE s.token_hash=$1 AND s.expires_at>now()`,[digestToken(token)]); const user=rows[0]; if(!user) return null; if(user.role==='admin') return { ...user, role:'admin', subjects:[] }; if(user.role==='teacher' && user.invited_name && user.active) return {...user,role:'teacher',name:user.invited_name,subjects:user.subjects}; return {...user,role:'student',subjects:[]}; }
+const requireUser = wrap(async (req,res,next) => { req.actor=await actor(req); if(!req.actor) throw fail(401,'سجّل الدخول أولاً.'); next(); });
+const admin = req => { if(req.actor.role!=='admin') throw fail(403,'هذه العملية للمدير فقط.'); };
+const teaches = (req,subject) => { if(req.actor.role!=='teacher' || !req.actor.subjects.includes(subject)) throw fail(403,'هذه المادة غير معتمدة لحسابك.'); };
+async function owner(req,table,resource) { const {rows}=await query(`SELECT * FROM ${table} WHERE id=$1`,[resource]); const item=rows[0]; if(!item) throw fail(404,'العنصر غير موجود.'); if(req.actor.role!=='admin') { if(item.owner_id!==req.actor.id) throw fail(403,'ليست لديك صلاحية على هذا العنصر.'); teaches(req,item.subject); } return item; }
+async function session(res,userId) { const token=randomBytes(32).toString('hex'); await query('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval \'30 days\')',[digestToken(token),userId]); res.cookie('school_session',token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:30*86400000}); }
+async function init() {
+ if(!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
+ await query(`CREATE TABLE IF NOT EXISTS users(id uuid PRIMARY KEY,email text UNIQUE NOT NULL,name text NOT NULL,password_hash text NOT NULL,role text NOT NULL DEFAULT 'student',created_at timestamptz DEFAULT now());
+ CREATE TABLE IF NOT EXISTS sessions(token_hash text PRIMARY KEY,user_id uuid REFERENCES users(id) ON DELETE CASCADE,expires_at timestamptz NOT NULL);
+ CREATE TABLE IF NOT EXISTS invites(email text PRIMARY KEY,name text NOT NULL,subjects jsonb NOT NULL,active boolean NOT NULL DEFAULT true,code_hash text);
+ CREATE TABLE IF NOT EXISTS channels(id uuid PRIMARY KEY,handle text UNIQUE NOT NULL,name text NOT NULL,subject text NOT NULL,book text NOT NULL,description text NOT NULL DEFAULT '',owner_id uuid REFERENCES users(id),teacher_name text NOT NULL,created_at timestamptz DEFAULT now());
+ CREATE TABLE IF NOT EXISTS memberships(user_id uuid REFERENCES users(id) ON DELETE CASCADE,channel_id uuid REFERENCES channels(id) ON DELETE CASCADE,PRIMARY KEY(user_id,channel_id));
+ CREATE TABLE IF NOT EXISTS posts(id uuid PRIMARY KEY,channel_id uuid REFERENCES channels(id) ON DELETE CASCADE,owner_id uuid REFERENCES users(id),text text NOT NULL DEFAULT '',image bytea,image_type text,created_at timestamptz DEFAULT now());
+ CREATE TABLE IF NOT EXISTS lectures(id uuid PRIMARY KEY,title text NOT NULL,subject text NOT NULL,book text NOT NULL,description text NOT NULL DEFAULT '',owner_id uuid REFERENCES users(id),teacher_name text NOT NULL,created_at timestamptz DEFAULT now());
+ ALTER TABLE lectures ADD COLUMN IF NOT EXISTS channel_id uuid REFERENCES channels(id) ON DELETE SET NULL;
+ CREATE INDEX IF NOT EXISTS lectures_channel_id_idx ON lectures(channel_id);
+ CREATE TABLE IF NOT EXISTS media(id uuid PRIMARY KEY,lecture_id uuid REFERENCES lectures(id) ON DELETE CASCADE,kind text NOT NULL,mime text NOT NULL,content bytea NOT NULL,UNIQUE(lecture_id,kind)); ALTER TABLE invites ADD COLUMN IF NOT EXISTS code_hash text;`);
+ await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS course_number text;
+ CREATE TABLE IF NOT EXISTS notifications(id uuid PRIMARY KEY,student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,sender_id uuid REFERENCES users(id) ON DELETE SET NULL,message text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),read_at timestamptz);
+ CREATE TABLE IF NOT EXISTS push_subscriptions(id uuid PRIMARY KEY,user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,endpoint text NOT NULL UNIQUE,subscription jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT now());
+ CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx ON push_subscriptions(user_id);
+ CREATE TABLE IF NOT EXISTS student_groups(id uuid PRIMARY KEY,name text NOT NULL UNIQUE,created_at timestamptz NOT NULL DEFAULT now());
+ CREATE TABLE IF NOT EXISTS student_group_members(group_id uuid NOT NULL REFERENCES student_groups(id) ON DELETE CASCADE,student_id uuid NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(group_id,student_id));`);
+ if(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+  const email=emailKey(process.env.ADMIN_EMAIL);
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || process.env.ADMIN_PASSWORD.length<12) throw new Error('ADMIN_EMAIL or ADMIN_PASSWORD invalid');
+  const {rows}=await query('SELECT id,role,password_hash FROM users WHERE email=$1',[email]);
+  if(rows.length && rows[0].role!=='admin') throw new Error('Admin email already belongs to a non-admin account');
+  if(!rows.length) {
+   await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[id(),email,process.env.ADMIN_NAME || 'إدارة المدرسة',await hash(process.env.ADMIN_PASSWORD),'admin']);
+   console.log('Initial administrator created');
+  } else if(!(await verify(process.env.ADMIN_PASSWORD,rows[0].password_hash))) {
+   await query('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(process.env.ADMIN_PASSWORD),rows[0].id]);
+   await query('DELETE FROM sessions WHERE user_id=$1',[rows[0].id]);
+   console.log('Administrator password synchronized with Railway variable');
+  }
+ }
+}
+// Delivery is best effort: publishing content must never fail because a push provider is offline.
+async function pushToStudents(studentIdsSql, params, notification) {
+  if (!getPushPublicKey()) return;
+  try {
+    const {rows}=await query(`SELECT ps.id,ps.subscription FROM push_subscriptions ps JOIN users u ON u.id=ps.user_id WHERE u.role='student' AND ps.user_id IN (${studentIdsSql})`,params);
+    await Promise.allSettled(rows.map(async item => {
+      try {
+        const result=await sendWebPush(item.subscription,notification);
+        if(result.gone) await query('DELETE FROM push_subscriptions WHERE id=$1',[item.id]);
+        else if(!result.ok && !result.disabled) console.warn('Push provider returned',result.status);
+      } catch(e) { console.warn('Push delivery failed:',e.message); }
+    }));
+  } catch(e) { console.warn('Push lookup failed:',e.message); }
+}
+function pushChannel(channelId,notification) {
+  void pushToStudents('SELECT user_id FROM memberships WHERE channel_id=$1',[channelId],notification);
+}
+function pushStudent(studentId,notification) { void pushToStudents('SELECT $1::uuid',[studentId],notification); }
+app.get('/api/push/key', requireUser, (req,res)=>res.json({publicKey:req.actor.role==='student'?getPushPublicKey():null}));
+app.post('/api/push/subscriptions',requireUser,wrap(async(req,res)=>{
+  if(req.actor.role!=='student')throw fail(403,'الإشعارات مخصصة للطلاب.');
+  if(!getPushPublicKey())throw fail(503,'الإشعارات غير مفعلة على الخادم.');
+  if(!validSubscription(req.body))throw fail(400,'بيانات الاشتراك غير صالحة.');
+  await query(`INSERT INTO push_subscriptions(id,user_id,endpoint,subscription) VALUES($1,$2,$3,$4)
+    ON CONFLICT(endpoint) DO UPDATE SET user_id=$2,subscription=$4`,[id(),req.actor.id,req.body.endpoint,JSON.stringify(req.body)]);
+  res.status(201).json({ok:true});
+}));
+app.delete('/api/push/subscriptions',requireUser,wrap(async(req,res)=>{
+  const endpoint=String(req.body?.endpoint||'');
+  if(endpoint)await query('DELETE FROM push_subscriptions WHERE user_id=$1 AND endpoint=$2',[req.actor.id,endpoint]);
+  res.json({ok:true});
+}));
+app.get('/api/health',(_req,res)=>res.json({ok:true}));
+app.post('/api/auth/register',wrap(async(req,res)=>{ const email=emailKey(req.body.email), name=clean(req.body.name,70), password=req.body.password, inviteCode=String(req.body.inviteCode||'').trim(); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!valid(name,70)||typeof password!=='string'||password.length<10||password.length>128) throw fail(400,'تحقق من البريد والاسم وكلمة مرور لا تقل عن ١٠ أحرف.'); try { let role='student'; if(inviteCode){const {rows}=await query('SELECT code_hash,active FROM invites WHERE email=$1',[email]);if(!rows[0]?.active||!rows[0].code_hash||digestToken(inviteCode)!==rows[0].code_hash)throw fail(403,'رمز دعوة الأستاذ غير صحيح.');role='teacher';} const userId=id(); await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[userId,email,name,await hash(password),role]); await session(res,userId); res.status(201).json({ok:true}); } catch(e){ if(e.code==='23505') throw fail(409,'البريد مسجّل مسبقًا.'); throw e; } }));
+app.post('/api/auth/login',wrap(async(req,res)=>{ const {rows}=await query('SELECT id,password_hash FROM users WHERE email=$1',[emailKey(req.body.email)]); if(!rows.length || !(await verify(String(req.body.password||''),rows[0].password_hash))) throw fail(401,'البريد أو كلمة المرور غير صحيحة.'); await session(res,rows[0].id); res.json({ok:true}); }));
+app.post('/api/auth/logout',wrap(async(req,res)=>{ const token=cookie(req); if(token) await query('DELETE FROM sessions WHERE token_hash=$1',[digestToken(token)]); res.clearCookie('school_session',{path:'/'}); res.json({ok:true}); }));
+app.delete('/api/auth/account',requireUser,wrap(async(req,res)=>{
+ const password=req.body?.password;
+ if(typeof password!=='string'||!password) throw fail(400,'أدخل كلمة المرور لتأكيد حذف الحساب.');
+ const client=await pool.connect();
+ try {
+  await client.query('BEGIN');
+  const {rows}=await client.query('SELECT email,role,password_hash FROM users WHERE id=$1 FOR UPDATE',[req.actor.id]);
+  if(!rows.length) throw fail(401,'سجّل الدخول أولاً.');
+  if(rows[0].role==='admin') throw fail(403,'لا يمكن حذف حساب الإدارة من هنا.');
+  if(!(await verify(password,rows[0].password_hash))) throw fail(401,'كلمة المرور غير صحيحة.');
+  await client.query('DELETE FROM posts WHERE owner_id=$1',[req.actor.id]);
+  await client.query('DELETE FROM channels WHERE owner_id=$1',[req.actor.id]);
+  await client.query('DELETE FROM lectures WHERE owner_id=$1',[req.actor.id]);
+  if(rows[0].role==='teacher') await client.query('DELETE FROM invites WHERE email=$1',[rows[0].email]);
+  await client.query('DELETE FROM users WHERE id=$1',[req.actor.id]);
+  await client.query('COMMIT');
+ } catch(error) { await client.query('ROLLBACK'); throw error; }
+ finally { client.release(); }
+ res.clearCookie('school_session',{path:'/'});
+ res.json({ok:true});
+}));
+app.get('/api/me',requireUser,wrap(async(req,res)=>{ const {id,email,name,role,subjects}=req.actor; res.json({id,email,name,role,subjects}); }));
+app.get('/api/data',requireUser,wrap(async(req,res)=>{ const user=req.actor; const [c,l,j,i,n]=await Promise.all([query('SELECT id,handle,name,subject,book,description,owner_id AS "ownerId",teacher_name AS "teacherName",created_at AS "createdAt" FROM channels ORDER BY created_at DESC'),query(`SELECT l.id,l.title,l.subject,l.book,l.description,l.owner_id AS "ownerId",l.teacher_name AS "teacherName",l.channel_id AS "channelId",c.name AS "channelName",l.created_at AS "createdAt",EXISTS(SELECT 1 FROM media m WHERE m.lecture_id=l.id AND kind='audio') AS "hasAudio",EXISTS(SELECT 1 FROM media m WHERE m.lecture_id=l.id AND kind='pdf') AS "hasPdf" FROM lectures l LEFT JOIN channels c ON c.id=l.channel_id WHERE ($1::text='admin' OR ($1::text='teacher' AND l.owner_id=$2) OR ($1::text='student' AND l.channel_id IS NOT NULL AND EXISTS(SELECT 1 FROM memberships mb WHERE mb.user_id=$2 AND mb.channel_id=l.channel_id))) ORDER BY l.created_at DESC`,[user.role,user.id]),query('SELECT channel_id FROM memberships WHERE user_id=$1',[user.id]),user.role==='admin'?query('SELECT email,name,subjects,active FROM invites ORDER BY name'):Promise.resolve({rows:[]}),query('SELECT id,message,created_at AS "createdAt",read_at AS "readAt" FROM notifications WHERE student_id=$1 ORDER BY created_at DESC LIMIT 100',[user.id])]); res.json({channels:c.rows,lectures:l.rows.map(x=>({...x,audioUrl:x.hasAudio?`/api/lectures/${x.id}/media/audio`:'',pdfUrl:x.hasPdf?`/api/lectures/${x.id}/media/pdf`:''})),joined:j.rows.map(x=>x.channel_id),invites:i.rows,notifications:n.rows}); }));
+app.get('/api/admin/students',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT u.id,u.name,u.email,u.course_number AS "courseNumber",u.created_at AS "createdAt",COALESCE(json_agg(DISTINCT c.subject) FILTER(WHERE c.subject IS NOT NULL),'[]'::json) AS subjects,COUNT(DISTINCT m.channel_id)::int AS "channelCount" FROM users u LEFT JOIN memberships m ON m.user_id=u.id LEFT JOIN channels c ON c.id=m.channel_id WHERE u.role='student' GROUP BY u.id ORDER BY u.created_at DESC`); res.json(rows); }));
+app.get('/api/admin/student-groups',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT g.id,g.name,g.created_at AS "createdAt",COUNT(gm.student_id)::int AS "studentCount" FROM student_groups g LEFT JOIN student_group_members gm ON gm.group_id=g.id GROUP BY g.id ORDER BY g.created_at DESC`);res.json(rows); }));
+app.post('/api/admin/student-groups',requireUser,wrap(async(req,res)=>{ admin(req);const name=clean(req.body?.name,80);if(!valid(name,80))throw fail(400,'اكتب اسم المجموعة بحد أقصى ٨٠ حرفًا.');try{const {rows}=await query('INSERT INTO student_groups(id,name) VALUES($1,$2) RETURNING id,name,created_at AS "createdAt"',[id(),name]);res.status(201).json({...rows[0],studentCount:0});}catch(e){if(e.code==='23505')throw fail(409,'توجد مجموعة بهذا الاسم مسبقًا.');throw e;} }));
+app.get('/api/admin/student-groups/unassigned',requireUser,wrap(async(req,res)=>{admin(req);const {rows}=await query(`SELECT u.id,u.name,u.email,u.course_number AS "courseNumber",u.created_at AS "createdAt" FROM users u LEFT JOIN student_group_members gm ON gm.student_id=u.id WHERE u.role='student' AND gm.student_id IS NULL ORDER BY u.name`);res.json(rows);}));
+app.get('/api/admin/student-groups/:id/students',requireUser,wrap(async(req,res)=>{admin(req);const {rows:groups}=await query('SELECT id,name FROM student_groups WHERE id=$1',[req.params.id]);if(!groups.length)throw fail(404,'المجموعة غير موجودة.');const {rows:students}=await query(`SELECT u.id,u.name,u.email,u.course_number AS "courseNumber",gm.created_at AS "addedAt" FROM student_group_members gm JOIN users u ON u.id=gm.student_id WHERE gm.group_id=$1 ORDER BY u.name`,[req.params.id]);res.json({group:groups[0],students});}));
+app.post('/api/admin/student-groups/:id/members',requireUser,wrap(async(req,res)=>{admin(req);const studentIds=[...new Set(Array.isArray(req.body?.studentIds)?req.body.studentIds:[])];if(!studentIds.length||studentIds.length>500)throw fail(400,'حدد طالبًا واحدًا على الأقل.');const {rowCount}=await query('SELECT 1 FROM student_groups WHERE id=$1',[req.params.id]);if(!rowCount)throw fail(404,'المجموعة غير موجودة.');const client=await pool.connect();try{await client.query('BEGIN');const {rows}=await client.query(`SELECT id FROM users WHERE id=ANY($1::uuid[]) AND role='student' FOR UPDATE`,[studentIds]);if(rows.length!==studentIds.length)throw fail(400,'بعض الحسابات المحددة غير موجودة أو ليست حسابات طلاب.');const {rows:existing}=await client.query('SELECT student_id FROM student_group_members WHERE student_id=ANY($1::uuid[])',[studentIds]);if(existing.length)throw fail(409,'أحد الطلاب المحددين أصبح ضمن مجموعة أخرى؛ حدّث القائمة وحاول مجددًا.');for(const studentId of studentIds)await client.query('INSERT INTO student_group_members(group_id,student_id) VALUES($1,$2)',[req.params.id,studentId]);await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}res.json({ok:true,added:studentIds.length});}));
+app.delete('/api/admin/student-groups/:groupId/members/:studentId',requireUser,wrap(async(req,res)=>{admin(req);const {rowCount}=await query('DELETE FROM student_group_members WHERE group_id=$1 AND student_id=$2',[req.params.groupId,req.params.studentId]);if(!rowCount)throw fail(404,'الطالب غير موجود في هذه المجموعة.');res.json({ok:true});}));
+app.delete('/api/admin/student-groups/:id',requireUser,wrap(async(req,res)=>{admin(req);const {rowCount}=await query('DELETE FROM student_groups WHERE id=$1',[req.params.id]);if(!rowCount)throw fail(404,'المجموعة غير موجودة.');res.json({ok:true});}));
+app.get('/api/admin/students/:id',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT id,name,email,course_number AS "courseNumber",created_at AS "createdAt" FROM users WHERE id=$1 AND role='student'`,[req.params.id]);if(!rows.length)throw fail(404,'الطالب غير موجود.');const {rows:channels}=await query(`SELECT c.id,c.name,c.subject,c.book,c.handle FROM memberships m JOIN channels c ON c.id=m.channel_id WHERE m.user_id=$1 ORDER BY c.subject,c.name`,[req.params.id]);res.json({...rows[0],channels}); }));
+async function deleteAccountRecords(client,userId){
+ await client.query('DELETE FROM posts WHERE owner_id=$1',[userId]);
+ await client.query('DELETE FROM channels WHERE owner_id=$1',[userId]);
+ await client.query('DELETE FROM lectures WHERE owner_id=$1',[userId]);
+ await client.query('DELETE FROM users WHERE id=$1',[userId]);
+}
+app.delete('/api/admin/students/:id',requireUser,wrap(async(req,res)=>{
+ admin(req);
+ const client=await pool.connect();
+ try { await client.query('BEGIN');
+  const {rows}=await client.query('SELECT id,email FROM users WHERE id=$1 AND role=$2 FOR UPDATE',[req.params.id,'student']);
+  if(!rows.length)throw fail(404,'حساب الطالب غير موجود.');
+  if(emailKey(req.body?.confirmEmail)!==rows[0].email)throw fail(400,'اكتب بريد الطالب نفسه لتأكيد الحذف.');
+  await deleteAccountRecords(client,rows[0].id);
+  await client.query('COMMIT');
+ }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ res.json({ok:true});
+}));
+app.delete('/api/admin/teachers/:email',requireUser,wrap(async(req,res)=>{
+ admin(req);
+ const email=emailKey(req.params.email);
+ if(emailKey(req.body?.confirmEmail)!==email)throw fail(400,'اكتب بريد الأستاذ نفسه لتأكيد الحذف.');
+ const client=await pool.connect();
+ try {await client.query('BEGIN');
+  const {rows:invites}=await client.query('SELECT email FROM invites WHERE email=$1 FOR UPDATE',[email]);
+  if(!invites.length)throw fail(404,'الأستاذ غير موجود في قائمة الدعوات.');
+  const {rows:users}=await client.query('SELECT id,role FROM users WHERE email=$1 FOR UPDATE',[email]);
+  if(users.length&&users[0].role!=='teacher')throw fail(409,'هذا البريد تابع لحساب آخر؛ لم يُحذف شيء.');
+  if(users.length)await deleteAccountRecords(client,users[0].id);
+  await client.query('DELETE FROM invites WHERE email=$1',[email]);
+  await client.query('COMMIT');
+ }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+ res.json({ok:true});
+}));
+app.patch('/api/admin/students/:id',requireUser,wrap(async(req,res)=>{ admin(req); const value=String(req.body.courseNumber||'').trim();if(value.length>30)throw fail(400,'رقم الدورة طويل جدًا.');const {rowCount}=await query(`UPDATE users SET course_number=$1 WHERE id=$2 AND role='student'`,[value||null,req.params.id]);if(!rowCount)throw fail(404,'الطالب غير موجود.');res.json({ok:true}); }));
+app.post('/api/admin/students/:id/notifications',requireUser,wrap(async(req,res)=>{ admin(req);const message=String(req.body.message||'').trim();if(message.length<1||message.length>1000)throw fail(400,'اكتب إشعارًا من ١ إلى ١٠٠٠ حرف.');const {rowCount}=await query(`SELECT 1 FROM users WHERE id=$1 AND role='student'`,[req.params.id]);if(!rowCount)throw fail(404,'الطالب غير موجود.');await query(`INSERT INTO notifications(id,student_id,sender_id,message) VALUES($1,$2,$3,$4)`,[id(),req.params.id,req.actor.id,message]);pushStudent(req.params.id,{title:'إشعار من إدارة المدرسة',body:message,url:'/?page=notifications'});res.status(201).json({ok:true}); }));
+app.patch('/api/notifications/:id/read',requireUser,wrap(async(req,res)=>{ const {rowCount}=await query(`UPDATE notifications SET read_at=COALESCE(read_at,now()) WHERE id=$1 AND student_id=$2`,[req.params.id,req.actor.id]);if(!rowCount)throw fail(404,'الإشعار غير موجود.');res.json({ok:true}); }));
+app.get('/api/channels/:id/posts',requireUser,wrap(async(req,res)=>{ const {rows:channels}=await query('SELECT owner_id FROM channels WHERE id=$1',[req.params.id]); if(!channels.length) throw fail(404,'القناة غير موجودة.'); if(req.actor.role!=='admin' && channels[0].owner_id!==req.actor.id) { const {rowCount}=await query('SELECT 1 FROM memberships WHERE user_id=$1 AND channel_id=$2',[req.actor.id,req.params.id]); if(!rowCount) throw fail(403,'انضم إلى القناة أولاً.'); } const {rows}=await query('SELECT id,text,created_at AS "createdAt",image IS NOT NULL AS "hasImage" FROM posts WHERE channel_id=$1 ORDER BY created_at DESC',[req.params.id]); res.json(rows.map(x=>({...x,imageUrl:x.hasImage?`/api/posts/${x.id}/image`:''}))); }));
+app.post('/api/invites',requireUser,wrap(async(req,res)=>{ admin(req); const email=emailKey(req.body.email),name=clean(req.body.name,70),subjects=[...new Set((Array.isArray(req.body.subjects)?req.body.subjects:[]).map(x=>clean(x,80)))]; if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!valid(name,70)||!subjects.length||subjects.length>20||subjects.some(x=>!valid(x,80))) throw fail(400,'تحقق من بيانات الأستاذ والمواد.'); const requested=String(req.body.inviteCode||'').trim();if(requested && !/^[A-Za-z0-9_-]{12,64}$/.test(requested))throw fail(400,'رمز الدعوة يجب أن يكون ١٢ إلى ٦٤ حرفًا إنجليزيًا أو رقمًا.');const code=requested||randomBytes(18).toString('base64url'); await query('INSERT INTO invites(email,name,subjects,active,code_hash) VALUES($1,$2,$3,$4,$5) ON CONFLICT(email) DO UPDATE SET name=$2,subjects=$3,active=$4,code_hash=$5',[email,name,JSON.stringify(subjects),req.body.active===true,digestToken(code)]); res.json({ok:true,inviteCode:code}); }));
+app.post('/api/channels',requireUser,wrap(async(req,res)=>{ teaches(req,req.body.subject); const {name,subject,book,description='',handle}=req.body; if(!valid(name,70)||!valid(book,100)||typeof description!=='string'||description.length>180||!/^([a-z][a-z0-9_]{3,23})$/.test(handle)) throw fail(400,'تحقق من اسم القناة والكتاب والمعرّف.'); const channelId=id(); try { await query('INSERT INTO channels(id,handle,name,subject,book,description,owner_id,teacher_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[channelId,handle,name.trim(),subject,book.trim(),description.trim(),req.actor.id,req.actor.name]); } catch(e){if(e.code==='23505')throw fail(409,'هذا المعرّف مستخدم لقناة أخرى.');throw e;} res.status(201).json({id:channelId}); }));
+app.delete('/api/channels/:id',requireUser,wrap(async(req,res)=>{ await owner(req,'channels',req.params.id); await query('DELETE FROM channels WHERE id=$1',[req.params.id]); res.json({ok:true}); }));
+app.post('/api/channels/:id/join',requireUser,wrap(async(req,res)=>{ const {rowCount}=await query('SELECT 1 FROM channels WHERE id=$1',[req.params.id]); if(!rowCount) throw fail(404,'القناة غير موجودة.'); await query('INSERT INTO memberships(user_id,channel_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[req.actor.id,req.params.id]); res.json({ok:true}); }));
+app.delete('/api/channels/:id/join',requireUser,wrap(async(req,res)=>{ await query('DELETE FROM memberships WHERE user_id=$1 AND channel_id=$2',[req.actor.id,req.params.id]); res.json({ok:true}); }));
+const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:25*1024*1024,files:1}});
+const lectureUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:100*1024*1024,files:1}});
+app.post('/api/channels/:id/posts',requireUser,upload.single('image'),wrap(async(req,res)=>{ await owner(req,'channels',req.params.id); const body=clean(req.body.text,3000),file=req.file; if(body.length>3000 || (!body&&!file) || (file && (!['image/png','image/jpeg','image/webp'].includes(file.mimetype)||file.size>5*1024*1024))) throw fail(400,'المنشور أو الصورة غير صالحة.'); await query('INSERT INTO posts(id,channel_id,owner_id,text,image,image_type) VALUES($1,$2,$3,$4,$5,$6)',[id(),req.params.id,req.actor.id,body,file?.buffer||null,file?.mimetype||null]); pushChannel(req.params.id,{title:'منشور جديد في قناة',body:body.slice(0,150)||'نشر الأستاذ صورة جديدة في القناة',url:'/?page=channels'});res.status(201).json({ok:true}); }));
+app.delete('/api/posts/:id',requireUser,wrap(async(req,res)=>{ const {rows}=await query('SELECT c.* FROM posts p JOIN channels c ON c.id=p.channel_id WHERE p.id=$1',[req.params.id]); if(!rows.length) throw fail(404,'المنشور غير موجود.'); if(req.actor.role!=='admin'){if(rows[0].owner_id!==req.actor.id)throw fail(403,'غير مسموح.');teaches(req,rows[0].subject);} await query('DELETE FROM posts WHERE id=$1',[req.params.id]); res.json({ok:true}); }));
+app.get('/api/posts/:id/image',requireUser,wrap(async(req,res)=>{ const {rows}=await query('SELECT p.image,p.image_type,p.channel_id,c.owner_id FROM posts p JOIN channels c ON c.id=p.channel_id WHERE p.id=$1',[req.params.id]); const p=rows[0]; if(!p?.image) throw fail(404,'الصورة غير موجودة.'); if(req.actor.role!=='admin' && p.owner_id!==req.actor.id){ const {rowCount}=await query('SELECT 1 FROM memberships WHERE user_id=$1 AND channel_id=$2',[req.actor.id,p.channel_id]);if(!rowCount)throw fail(403,'غير مسموح.');}res.type(p.image_type);res.set('Cache-Control','private, no-store');res.send(p.image); }));
+async function lectureChannel(req,channelId){ if(!channelId) throw fail(400,'اختر القناة التي تريد نشر المحاضرة فيها.'); const {rows}=await query('SELECT id,subject,book,owner_id FROM channels WHERE id=$1',[channelId]); const channel=rows[0]; if(!channel) throw fail(404,'القناة المحددة غير موجودة.'); if(req.actor.role!=='teacher'||channel.owner_id!==req.actor.id) throw fail(403,'يمكنك نشر المحاضرة في قنواتك أنت فقط.'); teaches(req,channel.subject); return channel; }
+async function authorizeLectureRead(req,lecture){ if(req.actor.role==='admin'||lecture.owner_id===req.actor.id)return; if(req.actor.role==='student'&&lecture.channel_id){ const {rowCount}=await query('SELECT 1 FROM memberships WHERE user_id=$1 AND channel_id=$2',[req.actor.id,lecture.channel_id]); if(rowCount)return; } throw fail(403,'هذه المحاضرة مخصصة لطلاب القناة المنضمّين إليها.'); }
+app.post('/api/lectures',requireUser,wrap(async(req,res)=>{ const {title,channelId,book,description=''}=req.body; const channel=await lectureChannel(req,channelId); if(!valid(title,100)||!valid(book,100)||typeof description!=='string'||description.length>500)throw fail(400,'بيانات المحاضرة غير مكتملة.');const lectureId=id();await query('INSERT INTO lectures(id,title,subject,book,description,owner_id,teacher_name,channel_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[lectureId,title.trim(),channel.subject,book.trim(),description.trim(),req.actor.id,req.actor.name,channel.id]);pushChannel(channel.id,{title:'محاضرة جديدة',body:title.trim(),url:`/?page=lectures&lecture=${lectureId}`});res.status(201).json({id:lectureId}); }));
+app.put('/api/lectures/:id',requireUser,wrap(async(req,res)=>{ const item=await owner(req,'lectures',req.params.id); const channel=await lectureChannel(req,req.body.channelId);if(!valid(req.body.title,100)||!valid(req.body.book,100)||typeof req.body.description!=='string'||req.body.description.length>500)throw fail(400,'بيانات المحاضرة غير صالحة.');await query('UPDATE lectures SET title=$1,subject=$2,book=$3,description=$4,channel_id=$5 WHERE id=$6',[req.body.title.trim(),channel.subject,req.body.book.trim(),req.body.description.trim(),channel.id,item.id]);res.json({ok:true}); }));
+app.delete('/api/lectures/:id',requireUser,wrap(async(req,res)=>{ await owner(req,'lectures',req.params.id);await query('DELETE FROM lectures WHERE id=$1',[req.params.id]);res.json({ok:true}); }));
+app.post('/api/lectures/:id/media/:kind',requireUser,wrap(async(req,res,next)=>{ await owner(req,'lectures',req.params.id);next(); }),lectureUpload.single('file'),wrap(async(req,res)=>{ const kind=req.params.kind,file=req.file;if(!file||!['audio','pdf'].includes(kind)||kind==='pdf'&&(file.mimetype!=='application/pdf'||file.size>25*1024*1024)||kind==='audio'&&!file.mimetype.startsWith('audio/'))throw fail(400,'نوع الملف غير مدعوم أو حجمه أكبر من المسموح.');await query('INSERT INTO media(id,lecture_id,kind,mime,content) VALUES($1,$2,$3,$4,$5) ON CONFLICT(lecture_id,kind) DO UPDATE SET mime=$4,content=$5',[id(),req.params.id,kind,file.mimetype,file.buffer]);res.json({ok:true}); }));
+app.get('/api/lectures/:id/media/:kind',requireUser,wrap(async(req,res)=>{ if(!['audio','pdf'].includes(req.params.kind))throw fail(404,'نوع الملف غير موجود.'); const {rows:items}=await query('SELECT id,owner_id,channel_id FROM lectures WHERE id=$1',[req.params.id]);if(!items.length)throw fail(404,'المحاضرة غير موجودة.');await authorizeLectureRead(req,items[0]);const {rows}=await query('SELECT mime,content FROM media WHERE lecture_id=$1 AND kind=$2',[req.params.id,req.params.kind]);if(!rows.length)throw fail(404,'الملف غير موجود.');res.type(rows[0].mime);res.set('Cache-Control','private, no-store');res.set('Content-Disposition',`inline; filename="lecture-${req.params.id}.${req.params.kind==='pdf'?'pdf':'audio'}"`);sendMedia(req,res,rows[0].content); }));
+app.use('/api',(req,res)=>res.status(404).json({error:'الطلب غير موجود.'}));
+const dist=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../dist');
+app.use(express.static(dist,{index:false}));
+app.use((req,res)=>res.sendFile(path.join(dist,'index.html')));
+app.use((err,req,res,next)=>{ if(err.code==='LIMIT_FILE_SIZE')return res.status(413).json({error:'التسجيل الصوتي يجب ألا يتجاوز ١٠٠ ميغابايت، وملف PDF يجب ألا يتجاوز ٢٥ ميغابايت.'}); if(err.code==='23503'||err.code==='22P02')return res.status(400).json({error:'بيانات الطلب غير صالحة.'});if(err.status)return res.status(err.status).json({error:err.message});console.error(err);res.status(500).json({error:'حدث خطأ في الخادم.'}); });
+await init();
+app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('School server listening'));
