@@ -22,3 +22,6 @@
  .cloud-app .side-link,.cloud-app .mobile-bottom-link{transition:none}
  .cloud-app .mobile-bottom-link.active .mobile-bottom-icon{animation:none}
 }
+
+.push-opt-in{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:16px;margin:12px 0;border:1px solid var(--line, #d8d1bc);border-radius:15px;background:var(--paper, #faf8f1)}
+.push-opt-in strong{font-size:1.05rem}.push-opt-in p{margin:5px 0;max-width:560px;line-height:1.7}.push-opt-in button{min-height:43px}
