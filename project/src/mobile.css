@@ -86,3 +86,32 @@
 }
 @keyframes mobile-menu-fade{from{opacity:0}to{opacity:1}}
 @media(prefers-reduced-motion:reduce){.mobile-navigation[open]{animation:none}}
+
+/* Mobile-first navigation update: visible only for signed-in cloud accounts. */
+.mobile-bottom-nav{display:none}
+@media(max-width:800px){
+ .cloud-app{min-width:0;overflow-x:clip}
+ .cloud-app .mobile-bottom-nav{position:fixed;bottom:0;right:0;left:0;z-index:25;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:stretch;min-height:66px;padding:5px max(6px,env(safe-area-inset-right)) calc(5px + env(safe-area-inset-bottom)) max(6px,env(safe-area-inset-left));background:var(--surface);border-top:1px solid var(--line);box-shadow:0 -5px 20px rgba(0,0,0,.08)}
+ .cloud-app .mobile-bottom-link{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:55px;min-width:0;padding:4px 1px;border:0;border-radius:9px;background:transparent;color:var(--muted);font-size:11px;font-weight:700;line-height:1.5;cursor:pointer}
+ .cloud-app .mobile-bottom-link.active{color:var(--teal);background:var(--surface-soft)}
+ .cloud-app .mobile-bottom-icon{position:relative;display:inline-flex;align-items:center;justify-content:center;height:24px}
+ .cloud-app .mobile-bottom-label{overflow:hidden;max-width:100%;white-space:nowrap;text-overflow:ellipsis}
+ .cloud-app .mobile-unread-dot{position:absolute;top:-2px;right:-6px;width:9px;height:9px;border-radius:50%;background:#b84d39;border:2px solid var(--surface)}
+ .cloud-app .main-content{padding-bottom:calc(105px + env(safe-area-inset-bottom))}
+ .cloud-app .toast{bottom:calc(82px + env(safe-area-inset-bottom))}
+ .cloud-app .topbar{background:var(--surface)}
+ .cloud-app .topbar-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:clamp(12px,3.8vw,16px)}
+ .cloud-app .topbar-start{flex:1;min-width:0}
+ .cloud-app .page-heading h2{font-size:clamp(24px,7vw,30px);line-height:1.35}
+ .app :is(.cloud-lecture-form,.cloud-invite-form,.account-delete) input[type=file]{width:100%;max-width:100%}
+ .app :is(.cloud-lecture-form,.cloud-invite-form) textarea{width:100%}
+ .app :is(.cloud-admin,.admin-students,.channel-card,.channel-post,.channel-composer,.section-block){overflow-wrap:anywhere}
+ .app :is(.modal,.account-card,.channel-card,.channel-composer,.channel-post){box-sizing:border-box}
+ .app .modal{width:min(100%,calc(100vw - 20px));max-height:calc(100dvh - 24px);overflow-y:auto;overscroll-behavior:contain}
+ .app .section-head>.primary-button{width:100%;justify-content:center}
+}
+@media(max-width:380px){
+ .cloud-app .mobile-bottom-link{font-size:10px}
+ .cloud-app .mobile-bottom-nav{padding-inline:3px}
+}
+@media(prefers-reduced-motion:reduce){.cloud-app .mobile-bottom-link{transition:none}}
