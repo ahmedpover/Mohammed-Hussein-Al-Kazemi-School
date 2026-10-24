@@ -1,5 +1,6 @@
 import { getPushPublicKey, validSubscription, sendWebPush } from './web-push.js';
 import { sendMedia } from './media-response.js';
+import { provisionAdmins } from './admin-bootstrap.js';
 import express from 'express';
 import pg from 'pg';
 import multer from 'multer';
@@ -58,20 +59,7 @@ async function init() {
  CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx ON push_subscriptions(user_id);
  CREATE TABLE IF NOT EXISTS student_groups(id uuid PRIMARY KEY,name text NOT NULL UNIQUE,created_at timestamptz NOT NULL DEFAULT now());
  CREATE TABLE IF NOT EXISTS student_group_members(group_id uuid NOT NULL REFERENCES student_groups(id) ON DELETE CASCADE,student_id uuid NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(group_id,student_id));`);
- if(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
-  const email=emailKey(process.env.ADMIN_EMAIL);
-  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || process.env.ADMIN_PASSWORD.length<12) throw new Error('ADMIN_EMAIL or ADMIN_PASSWORD invalid');
-  const {rows}=await query('SELECT id,role,password_hash FROM users WHERE email=$1',[email]);
-  if(rows.length && rows[0].role!=='admin') throw new Error('Admin email already belongs to a non-admin account');
-  if(!rows.length) {
-   await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[id(),email,process.env.ADMIN_NAME || 'إدارة المدرسة',await hash(process.env.ADMIN_PASSWORD),'admin']);
-   console.log('Initial administrator created');
-  } else if(!(await verify(process.env.ADMIN_PASSWORD,rows[0].password_hash))) {
-   await query('UPDATE users SET password_hash=$1 WHERE id=$2',[await hash(process.env.ADMIN_PASSWORD),rows[0].id]);
-   await query('DELETE FROM sessions WHERE user_id=$1',[rows[0].id]);
-   console.log('Administrator password synchronized with Railway variable');
-  }
- }
+ await provisionAdmins({ query, hash, verify, id });
 }
 // Delivery is best effort: publishing content must never fail because a push provider is offline.
 async function pushToStudents(studentIdsSql, params, notification) {
