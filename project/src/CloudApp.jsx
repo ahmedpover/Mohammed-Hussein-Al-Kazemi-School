@@ -9,7 +9,7 @@ import CloudAccount from './CloudAccount.jsx';
 import Channels from './Channels.jsx';
 import AdminStudents from './AdminStudents.jsx';
 import Notifications from './Notifications.jsx';
-import { createChannel, createPost, formatDate, joinChannel, leaveChannel, removeChannel, removeLecture, removePost, saveInvite, saveLecture, loadData, loadPosts, deleteTeacher } from './cloudData.js';
+import { createChannel, createPost, formatDate, joinChannel, leaveChannel, removeChannel, removeLecture, removePost, saveInvite, saveLecture, loadData, loadPosts, deleteTeacher, loadChannelTeachers } from './cloudData.js';
 import './cloud.css';
 
 const SCHOOL = 'مدرسة الشيخ محمد حسين الكاظمي';
@@ -20,6 +20,7 @@ export default function CloudApp() {
   const [error, setError] = useState('');
   const [page, setPage] = useMotionState('home');
   const [channels, setChannels] = useState([]);
+  const [channelTeachers, setChannelTeachers] = useState([]);
   const [posts, setPosts] = useState({});
   const [joined, setJoined] = useState([]);
   const [lectures, setLectures] = useState([]);
@@ -37,7 +38,7 @@ export default function CloudApp() {
   async function refreshUser() { const current=await me(); setUser(current); setIdentity(current); setPage(['notifications','channels','lectures'].includes(new URLSearchParams(location.search).get('page')) ? new URLSearchParams(location.search).get('page') : 'home');const lectureId=new URLSearchParams(location.search).get('lecture');if(lectureId && /^[0-9a-f-]{36}$/i.test(lectureId))setSelectedLecture(lectureId); }
   useEffect(() => { refreshUser().catch(() => {setUser(null);setError('تعذر الاتصال بالخادم.');}); }, []);
   useEffect(() => { try { localStorage.setItem('hawza-cloud-dark', dark ? '1' : '0'); } catch {} }, [dark]);
-  const refresh = async () => { const data=await loadData();setChannels(data.channels);setLectures(data.lectures.map(item=>({...item,date:date(item.createdAt)})));setJoined(data.joined);setInvites(data.invites);setNotifications(data.notifications || []);const visible=data.channels.filter(item=>identity?.role==='admin'||item.ownerId===user?.id||data.joined.includes(item.id));const all=await Promise.all(visible.map(async item=>[item.id,await loadPosts(item.id)]));setPosts(Object.fromEntries(all.map(([id,items])=>[id,items.map(item=>({...item,date:date(item.createdAt)}))]))); };
+  const refresh = async () => { const data=await loadData();if(user?.role === 'admin') { try { setChannelTeachers(await loadChannelTeachers()); } catch { setChannelTeachers([]); } }setChannels(data.channels);setLectures(data.lectures.map(item=>({...item,date:date(item.createdAt)})));setJoined(data.joined);setInvites(data.invites);setNotifications(data.notifications || []);const visible=data.channels.filter(item=>identity?.role==='admin'||item.ownerId===user?.id||data.joined.includes(item.id));const all=await Promise.all(visible.map(async item=>[item.id,await loadPosts(item.id)]));setPosts(Object.fromEntries(all.map(([id,items])=>[id,items.map(item=>({...item,date:date(item.createdAt)}))]))); };
   useEffect(() => { if(!identity)return;let alive=true;const update=()=>{if(alive)refresh().catch(()=>setError('تعذر تحميل البيانات.'));};update();const timer=setInterval(update,7000);return()=>{alive=false;clearInterval(timer);}; },[identity?.id]);
   const signOut=async()=>{try{if('serviceWorker' in navigator){const reg=await navigator.serviceWorker.getRegistration();const sub=await reg?.pushManager?.getSubscription();if(sub){await fetch('/api/push/subscriptions',{method:'DELETE',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({endpoint:sub.endpoint})});await sub.unsubscribe();}}}catch(e){console.warn('Could not remove push subscription',e);}setPlayingLecture(null);await logout();setUser(null);setIdentity(null);};
   const removeMyAccount=async event=>{event.preventDefault();setDeleteBusy(true);setError('');try { await deleteAccount(deletePassword);setIdentity(null);setUser(null);setDeletePassword('');setDeletingAccount(false); } catch(cause) {setError(cause.message||'تعذر حذف الحساب.');} finally {setDeleteBusy(false);} };
@@ -70,7 +71,7 @@ export default function CloudApp() {
       {page === 'home' && <>{role === 'student' && <PushOptIn />}<div className="welcome-banner"><div><span className="welcome-kicker">مرحبًا، {identity.name}</span><h3>{role === 'admin' ? 'لوحة إدارة المدرسة' : role === 'teacher' ? 'موادك ومحاضراتك' : 'تابع موادك وقنواتك'}</h3><p>{role === 'admin' ? 'تابع الطلاب والأساتذة والقنوات والمحاضرات من حساب الإدارة.' : role === 'teacher' ? 'انشر الدروس والقنوات في المواد التي اعتمدتها الإدارة.' : 'ابحث عن قناة أستاذك واطلع على المحاضرات المنشورة.'}</p><button onClick={() => setPage(role === 'admin' ? 'teachers' : role === 'teacher' ? 'lectures' : 'channels')}>{role === 'admin' ? 'إدارة الأساتذة' : role === 'teacher' ? 'محاضراتي' : 'قنوات المواد'}</button></div><div className="arch-motif" aria-hidden="true"><GraduationCap size={48} /></div></div>{role === 'teacher' && <p className="scope-note">المواد المعتمدة لك: {identity.subjects.join('، ') || 'لا توجد مادة مخصصة بعد'}</p>}<div className="cloud-shortcuts">{(role === 'admin' ? [['الأساتذة', 'teachers', Users], ['الطلاب', 'students', GraduationCap], ['القنوات', 'channels', MessagesSquare], ['المحاضرات', 'lectures', Headphones]] : [['قنوات المواد', 'channels', MessagesSquare], ['المحاضرات', 'lectures', Headphones]]).map(([name, id, Icon]) => <button key={id} onClick={() => setPage(id)} className="channel-home-link"><Icon size={24} /><strong>{name}</strong></button>)}</div></>}
       {page === 'teachers' && role === 'admin' && <TeacherManagement invites={invites} onSave={data => attempt(() => saveInvite(data), 'حُفظت بيانات الأستاذ')} onDelete={email => attempt(() => deleteTeacher(email,email), 'حُذف حساب الأستاذ ودعوته')} />}
       {page === 'students' && role === 'admin' && <AdminStudents />}
-      {page === 'channels' && <Channels role={role} userId={user.id} channels={displayChannels} lectures={lectures} joined={joined} allowedSubjects={isTeacher ? identity.subjects : undefined} onOpenLecture={lectureId => { setSelectedLecture(lectureId); setPage('lectures'); }}
+      {page === 'channels' && <Channels role={role} userId={user.id} channelTeachers={channelTeachers} channels={displayChannels} lectures={lectures} joined={joined} allowedSubjects={isTeacher ? identity.subjects : undefined} onOpenLecture={lectureId => { setSelectedLecture(lectureId); setPage('lectures'); }}
         onCreate={data => attempt(() => createChannel(user, data, identity.name), 'أُنشئت القناة')}
         onJoin={id => attempt(() => joinChannel(user.id, id), 'انضممت إلى القناة').catch(() => {})}
         onLeave={id => attempt(() => leaveChannel(user.id, id), 'غادرت القناة').catch(() => {})}
