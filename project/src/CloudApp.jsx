@@ -10,7 +10,7 @@ import Channels from './Channels.jsx';
 import AdminStudents from './AdminStudents.jsx';
 import Notifications from './Notifications.jsx';
 import Questions from './Questions.jsx';
-import { createChannel, createPost, formatDate, joinChannel, leaveChannel, removeChannel, removeLecture, removePost, saveInvite, saveLecture, loadData, loadPosts, deleteTeacher, loadChannelTeachers } from './cloudData.js';
+import { createChannel, createPost, createPoll, votePoll, closePoll, formatDate, joinChannel, leaveChannel, removeChannel, removeLecture, removePost, saveInvite, saveLecture, loadData, loadPosts, deleteTeacher, loadChannelTeachers } from './cloudData.js';
 import './cloud.css';
 
 const SCHOOL = 'مدرسة الشيخ محمد حسين الكاظمي';
@@ -76,7 +76,10 @@ export default function CloudApp() {
         onCreate={data => attempt(() => createChannel(user, data, identity.name), 'أُنشئت القناة')}
         onJoin={id => attempt(() => joinChannel(user.id, id), 'انضممت إلى القناة').catch(() => {})}
         onLeave={id => attempt(() => leaveChannel(user.id, id), 'غادرت القناة').catch(() => {})}
-        onPost={(id, post) => attempt(() => createPost(user, id, post), 'نُشر المنشور')}
+        onPost={(id, post) => attempt(() => createPost(user, id, post), 'أُرسلت الرسالة')}
+        onPoll={(id, poll) => attempt(() => createPoll(id, poll), 'نُشر الاستفتاء')}
+        onVote={(_channelId, postId, optionIndex) => attempt(() => votePoll(postId, optionIndex))}
+        onClosePoll={(_channelId, postId) => attempt(() => closePoll(postId), 'أُغلق الاستفتاء')}
         onDeletePost={(id, postId) => { const post = (posts[id] || []).find(item => item.id === postId); if (post && window.confirm('حذف هذا المنشور؟')) attempt(() => removePost(id, post), 'حُذف المنشور').catch(() => {}); }}
         onDeleteChannel={async channel => { if (!window.confirm(`حذف قناة «${channel.name}» ومنشوراتها؟`)) return false; await attempt(() => removeChannel(channel), 'حُذفت القناة'); return true; }} />}
       {page === 'lectures' && (selectedLecture ? <LectureView lecture={lectures.find(item => item.id === selectedLecture) || selectedLecture} onBack={() => setSelectedLecture(null)} onPlay={setPlayingLecture} /> : <section className="section-block cloud-lectures"><div className="section-head"><div><h3>{isTeacher ? 'محاضراتي' : 'المواد والمحاضرات'}</h3><p>{listed.length} محاضرات</p></div>{canPublishLectures && <button className="primary-button" onClick={() => { if (!lecturePublishChannels.length) { say(role === 'admin' ? 'لا توجد قنوات منشأة بعد. اطلب من أحد الأساتذة إنشاء قناة أولاً.' : 'أنشئ قناة أولاً، ثم اخترها عند نشر المحاضرة.'); return; } setEditingLecture(null); }}><Plus size={17} /> إضافة محاضرة</button>}</div>{canPublishLectures && editingLecture !== undefined && <LectureForm initial={editingLecture} channels={lecturePublishChannels} onCancel={() => setEditingLecture(undefined)} onSave={async data => { await attempt(() => saveLecture(user, data, editingLecture, identity.name), 'حُفظت المحاضرة'); setEditingLecture(undefined); }} />}{listed.length ? <div className="lecture-stack">{listed.map(item => <article className="lecture-row" key={item.id}><div className="round-icon mint"><BookOpen size={21} /></div><button className="lecture-main" onClick={() => setSelectedLecture(item.id)}><strong>{item.title}</strong><span>{item.channelName ? `${item.channelName} · ` : ''}{item.subject} · {item.book} · {item.date}</span></button>{(isTeacher || (role === 'admin' && item.ownerId === user.id)) && <><button className="row-action" onClick={() => setEditingLecture(item)}>تعديل</button><button className="row-action danger-text" onClick={() => { if (window.confirm('حذف هذه المحاضرة؟')) attempt(() => removeLecture(item), 'حُذفت المحاضرة').catch(() => {}); }} aria-label="حذف المحاضرة"><Trash2 size={16} /></button></>}</article>)}</div> : <p className="quiet-empty">لا توجد محاضرات منشورة بعد.</p>}</section>)}
