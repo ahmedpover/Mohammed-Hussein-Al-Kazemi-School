@@ -1,0 +1,17 @@
+{
+  "name": "مدرسة الشيخ محمد حسين الكاظمي",
+  "short_name": "مدرسة الكاظمي",
+  "description": "بوابة المحاضرات والقنوات التعليمية",
+  "lang": "ar",
+  "dir": "rtl",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f0e7",
+  "theme_color": "#073747",
+  "icons": [
+    { "src": "/icons/school-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/school-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
