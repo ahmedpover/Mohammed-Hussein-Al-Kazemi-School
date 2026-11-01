@@ -1,5 +1,6 @@
 import { api, json, date } from './api.js';
 export const loadStudents=()=>api('/admin/students');
+export const loadChannelTeachers=()=>api('/admin/channel-teachers');
 export const loadStudent=id=>api(`/admin/students/${id}`);
 export const deleteStudent=(id,confirmEmail)=>json(`/admin/students/${id}`,'DELETE',{confirmEmail});
 export const deleteTeacher=(email,confirmEmail)=>json(`/admin/teachers/${encodeURIComponent(email)}`,'DELETE',{confirmEmail});
