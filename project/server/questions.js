@@ -94,8 +94,13 @@ export function createQuestionsRouter({query,id,requireUser,fail,pushStudent}) {
   }
 
   router.get('/teachers',wrapped(async(req,res)=>{
-    const {rows}=await query(`SELECT u.id,i.name FROM users u JOIN invites i ON i.email=u.email
-      WHERE u.role='teacher' AND i.active=true ORDER BY i.name`);
+    if(req.actor.role!=='student') throw fail(403,'هذه القائمة مخصصة للطلاب.');
+    const {rows}=await query(`SELECT DISTINCT u.id,i.name FROM memberships m
+      JOIN channels c ON c.id=m.channel_id
+      JOIN users u ON u.id=c.owner_id
+      JOIN invites i ON i.email=u.email
+      WHERE m.user_id=$1 AND u.role='teacher' AND i.active=true
+      ORDER BY i.name`,[req.actor.id]);
     res.json(rows);
   }));
 
@@ -116,9 +121,13 @@ export function createQuestionsRouter({query,id,requireUser,fail,pushStudent}) {
       throw fail(400,'حدد الموضوع واكتب عنوانًا وسؤالًا لا يتجاوز ٥٠٠٠ حرف.');
     if (teacherId!==null) {
       if(!isUUID(teacherId)) throw fail(400,'اختر أستاذًا من القائمة.');
-      const {rowCount}=await query(`SELECT 1 FROM users u JOIN invites i ON i.email=u.email
-        WHERE u.id=$1 AND u.role='teacher' AND i.active=true`,[teacherId]);
-      if(!rowCount)throw fail(400,'الأستاذ المختار غير متاح حالياً.');
+      const {rowCount}=await query(`SELECT 1 FROM memberships m
+        JOIN channels c ON c.id=m.channel_id
+        JOIN users u ON u.id=c.owner_id
+        JOIN invites i ON i.email=u.email
+        WHERE m.user_id=$1 AND u.id=$2 AND u.role='teacher' AND i.active=true`,
+        [req.actor.id,teacherId]);
+      if(!rowCount)throw fail(400,'تستطيع إرسال سؤال خاص فقط لأساتذة القنوات التي انضممت إليها.');
     }
     const questionId=id();
     await query('INSERT INTO questions(id,student_id,teacher_id,audience,topic,title,body) VALUES($1,$2,$3,$4,$5,$6,$7)',
