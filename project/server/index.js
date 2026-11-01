@@ -1,6 +1,7 @@
 import { getPushPublicKey, validSubscription, sendWebPush } from './web-push.js';
 import { sendMedia } from './media-response.js';
 import { provisionAdmins } from './admin-bootstrap.js';
+import { createQuestionsRouter, initQuestionTables } from './questions.js';
 import express from 'express';
 import pg from 'pg';
 import multer from 'multer';
@@ -60,6 +61,7 @@ async function init() {
  CREATE TABLE IF NOT EXISTS student_groups(id uuid PRIMARY KEY,name text NOT NULL UNIQUE,created_at timestamptz NOT NULL DEFAULT now());
  CREATE TABLE IF NOT EXISTS student_group_members(group_id uuid NOT NULL REFERENCES student_groups(id) ON DELETE CASCADE,student_id uuid NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(group_id,student_id));`);
  await provisionAdmins({ query, hash, verify, id });
+ await initQuestionTables(query);
 }
 // Delivery is best effort: publishing content must never fail because a push provider is offline.
 async function pushToStudents(studentIdsSql, params, notification) {
@@ -201,10 +203,11 @@ app.put('/api/lectures/:id',requireUser,wrap(async(req,res)=>{ const item=await 
 app.delete('/api/lectures/:id',requireUser,wrap(async(req,res)=>{ await owner(req,'lectures',req.params.id);await query('DELETE FROM lectures WHERE id=$1',[req.params.id]);res.json({ok:true}); }));
 app.post('/api/lectures/:id/media/:kind',requireUser,wrap(async(req,res,next)=>{ await owner(req,'lectures',req.params.id);next(); }),lectureUpload.single('file'),wrap(async(req,res)=>{ const kind=req.params.kind,file=req.file;if(!file||!['audio','pdf'].includes(kind)||kind==='pdf'&&(file.mimetype!=='application/pdf'||file.size>25*1024*1024)||kind==='audio'&&!file.mimetype.startsWith('audio/'))throw fail(400,'نوع الملف غير مدعوم أو حجمه أكبر من المسموح.');await query('INSERT INTO media(id,lecture_id,kind,mime,content) VALUES($1,$2,$3,$4,$5) ON CONFLICT(lecture_id,kind) DO UPDATE SET mime=$4,content=$5',[id(),req.params.id,kind,file.mimetype,file.buffer]);res.json({ok:true}); }));
 app.get('/api/lectures/:id/media/:kind',requireUser,wrap(async(req,res)=>{ if(!['audio','pdf'].includes(req.params.kind))throw fail(404,'نوع الملف غير موجود.'); const {rows:items}=await query('SELECT id,owner_id,channel_id FROM lectures WHERE id=$1',[req.params.id]);if(!items.length)throw fail(404,'المحاضرة غير موجودة.');await authorizeLectureRead(req,items[0]);const {rows}=await query('SELECT mime,content FROM media WHERE lecture_id=$1 AND kind=$2',[req.params.id,req.params.kind]);if(!rows.length)throw fail(404,'الملف غير موجود.');res.type(rows[0].mime);res.set('Cache-Control','private, no-store');res.set('Content-Disposition',`inline; filename="lecture-${req.params.id}.${req.params.kind==='pdf'?'pdf':'audio'}"`);sendMedia(req,res,rows[0].content); }));
+app.use('/api/questions',createQuestionsRouter({query,id,requireUser,fail,pushStudent}));
 app.use('/api',(req,res)=>res.status(404).json({error:'الطلب غير موجود.'}));
 const dist=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../dist');
 app.use(express.static(dist,{index:false}));
 app.use((req,res)=>res.sendFile(path.join(dist,'index.html')));
-app.use((err,req,res,next)=>{ if(err.code==='LIMIT_FILE_SIZE')return res.status(413).json({error:'التسجيل الصوتي يجب ألا يتجاوز ١٠٠ ميغابايت، وملف PDF يجب ألا يتجاوز ٢٥ ميغابايت.'}); if(err.code==='23503'||err.code==='22P02')return res.status(400).json({error:'بيانات الطلب غير صالحة.'});if(err.status)return res.status(err.status).json({error:err.message});console.error(err);res.status(500).json({error:'حدث خطأ في الخادم.'}); });
+app.use((err,req,res,next)=>{ if(err.code==='LIMIT_FILE_SIZE')return res.status(413).json({error:'الملف أكبر من الحجم المسموح لهذه العملية.'}); if(err.name==='MulterError')return res.status(400).json({error:'عدد الملفات أو بيانات الرفع غير صالحة.'}); if(err.code==='23503'||err.code==='22P02')return res.status(400).json({error:'بيانات الطلب غير صالحة.'});if(err.status)return res.status(err.status).json({error:err.message});console.error(err);res.status(500).json({error:'حدث خطأ في الخادم.'}); });
 await init();
 app.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('School server listening'));
