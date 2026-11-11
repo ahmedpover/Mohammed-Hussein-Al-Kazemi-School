@@ -10,8 +10,6 @@ export const validMonth = value => typeof value==='string' && /^20\d{2}-(0[1-9]|
 export function validateLessonInput(value) {
   if (!value || !validUUID(value.groupId)) throw Object.assign(new Error('اختر الشعبة أولاً.'),{status:400});
   if (!validDate(value.lessonDate)) throw Object.assign(new Error('اختر تاريخاً صحيحاً.'),{status:400});
-  const period = Number(value.period);
-  if (!Number.isInteger(period) || period < 1 || period > 12) throw Object.assign(new Error('رقم الحصة يجب أن يكون بين 1 و12.'),{status:400});
   const subject=typeof value.subject==='string'?value.subject.trim():'';
   if (!subject || subject.length>100) throw Object.assign(new Error('اكتب اسم المادة (حتى 100 حرف).'),{status:400});
   if (!Array.isArray(value.entries) || value.entries.length > 500 || value.entries.length === 0) throw Object.assign(new Error('قائمة الطلاب غير صحيحة.'),{status:400});
@@ -22,7 +20,7 @@ export function validateLessonInput(value) {
   }
   if (value.finalize !== true && value.finalize !== false) throw Object.assign(new Error('حدد حفظ المسودة أو اعتماد السجل.'),{status:400});
   if(value.lessonId!==undefined && value.lessonId!==null && !validUUID(value.lessonId))throw Object.assign(new Error('معرّف السجل غير صحيح.'),{status:400});
-  return {groupId:value.groupId,lessonDate:value.lessonDate,period,subject,entries:value.entries,finalize:value.finalize,lessonId:value.lessonId||null};
+  return {groupId:value.groupId,lessonDate:value.lessonDate,subject,entries:value.entries,finalize:value.finalize,lessonId:value.lessonId||null};
 }
 export function verifyRoster(expectedIds, entries) {
   const expected=new Set(expectedIds);

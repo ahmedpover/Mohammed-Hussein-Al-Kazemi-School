@@ -88,25 +88,31 @@ export function createAttendanceRouter({query,pool,id}){
      await client.query('BEGIN');
      const {rows:groups}=await client.query('SELECT id,name FROM student_groups WHERE id=$1 FOR SHARE',[input.groupId]);
      if(!groups.length)throw fail(404,'الشعبة غير موجودة.');
-     const {rows:existing}=await client.query(`SELECT id FROM attendance_lessons WHERE group_id=$1 AND lesson_date=$2::date AND period=$3 FOR UPDATE`,[input.groupId,input.lessonDate,input.period]);
-     const lessonId=existing[0]?.id||id();
-     // Prevent an unintentional overwrite when an administrator selects an occupied period.
-     if(existing.length && input.lessonId!==lessonId)throw fail(409,'هذه الحصة مسجلة مسبقاً. افتح سجلها من قائمة حصص اليوم لتعديله.');
-     if(!existing.length && input.lessonId)throw fail(409,'السجل الذي تحاول تعديله لم يعد في هذا الموضع؛ أعد تحميل القائمة.');
+     let lessonId=input.lessonId||null;
+     let lessonPeriod=1;
      let roster;
-     if(existing.length){
+     if(lessonId){
+       const {rows:currentRows}=await client.query('SELECT id,period FROM attendance_lessons WHERE id=$1 FOR UPDATE',[lessonId]);
+       if(!currentRows.length)throw fail(409,'السجل الذي تحاول تعديله لم يعد موجوداً؛ أعد تحميل القائمة.');
+       lessonPeriod=currentRows[0].period || 1;
+       const {rows:dup}=await client.query(`SELECT id FROM attendance_lessons WHERE group_id=$1 AND lesson_date=$2::date AND LOWER(BTRIM(subject))=LOWER(BTRIM($3)) AND id<>$4 FOR UPDATE`,[input.groupId,input.lessonDate,input.subject,lessonId]);
+       if(dup.length)throw fail(409,'هذه المادة مسجلة مسبقاً في هذا اليوم. افتح سجلها من قائمة مواد اليوم لتعديله.');
        const {rows}=await client.query('SELECT student_id AS id,student_name AS name,status FROM attendance_entries WHERE lesson_id=$1 ORDER BY student_name,student_id',[lessonId]);
        roster=rows;
      } else {
+       const {rows:sameDay}=await client.query('SELECT id,period,subject FROM attendance_lessons WHERE group_id=$1 AND lesson_date=$2::date ORDER BY period FOR UPDATE',[input.groupId,input.lessonDate]);
+       const duplicate=sameDay.find(item=>String(item.subject||'').trim().toLowerCase()===input.subject.trim().toLowerCase());
+       if(duplicate)throw fail(409,'هذه المادة مسجلة مسبقاً في هذا اليوم. افتح سجلها من قائمة مواد اليوم لتعديله.');
+       lessonPeriod=(sameDay.at(-1)?.period || 0) + 1;
+       lessonId=id();
        const {rows}=await client.query(`SELECT u.id,u.name FROM student_group_members gm JOIN users u ON u.id=gm.student_id WHERE gm.group_id=$1 AND u.role='student' ORDER BY u.name,u.id`,[input.groupId]);
        roster=rows;
      }
      verifyRoster(roster.map(item=>item.id),input.entries);
-     if(!existing.length){
-       // Unique(group,date,period) guards against two simultaneous entries for the same lesson.
-       await client.query(`INSERT INTO attendance_lessons(id,group_id,group_name,lesson_date,period,subject,finalized,created_by,updated_by,finalized_at) VALUES($1,$2,$3,$4::date,$5,$6,$7,$8,$8,CASE WHEN $7 THEN now() ELSE NULL END)`,[lessonId,input.groupId,groups[0].name,input.lessonDate,input.period,input.subject,input.finalize,req.actor.id]);
+     if(!input.lessonId){
+       await client.query(`INSERT INTO attendance_lessons(id,group_id,group_name,lesson_date,period,subject,finalized,created_by,updated_by,finalized_at) VALUES($1,$2,$3,$4::date,$5,$6,$7,$8,$8,CASE WHEN $7 THEN now() ELSE NULL END)`,[lessonId,input.groupId,groups[0].name,input.lessonDate,lessonPeriod,input.subject,input.finalize,req.actor.id]);
      } else {
-       await client.query(`UPDATE attendance_lessons SET subject=$1,group_name=$2,finalized=finalized OR $3,finalized_at=CASE WHEN $3 AND finalized_at IS NULL THEN now() ELSE finalized_at END,updated_by=$4,updated_at=now() WHERE id=$5`,[input.subject,groups[0].name,input.finalize,req.actor.id,lessonId]);
+       await client.query(`UPDATE attendance_lessons SET subject=$1,group_name=$2,finalized=finalized OR $3,updated_by=$4,updated_at=now(),finalized_at=CASE WHEN $3 AND finalized_at IS NULL THEN now() ELSE finalized_at END WHERE id=$5`,[input.subject,groups[0].name,input.finalize,req.actor.id,lessonId]);
      }
      const previous=new Map(roster.map(item=>[item.id,item.status]));
      const names=new Map(roster.map(item=>[item.id,item.name]));
@@ -117,8 +123,8 @@ export function createAttendanceRouter({query,pool,id}){
        await client.query(`INSERT INTO attendance_audit(id,lesson_id,student_id,old_status,new_status,changed_by) VALUES($1,$2,$3,$4,$5,$6)`,[id(),lessonId,entry.studentId,prior,entry.status,req.actor.id]);
      }
      await client.query('COMMIT');
-     res.status(existing.length?200:201).json({id:lessonId,finalized:input.finalize,ok:true});
-   }catch(error){await client.query('ROLLBACK');if(error.code==='23505')throw fail(409,'هذه الحصة تم حفظها من حساب آخر. حدّث القائمة وافتح السجل الموجود.');throw error;}finally{client.release();}
+     res.status(input.lessonId?200:201).json({id:lessonId,finalized:input.finalize,ok:true});
+   }catch(error){await client.query('ROLLBACK');if(error.code==='23505')throw fail(409,'هذه المادة تم حفظها من حساب آخر. حدّث القائمة وافتح السجل الموجود.');throw error;}finally{client.release();}
  }));
  router.get('/report',wrap(async(req,res)=>{
    admin(req);

@@ -25,15 +25,15 @@ test('student self-history never accepts another student id from query',async()=
  assert.equal(result.status,200);assert.equal(result.body.totals.absences,1);
  assert.equal(sqlArgs.length,2);assert.ok(sqlArgs.every(args=>args.length===1&&args[0]===uid));
 });
-test('cannot overwrite saved day/period without opening existing lesson explicitly',async()=>{
+test('cannot overwrite same day and subject without opening existing lesson explicitly',async()=>{
  const queries=[];
  const pool={connect:async()=>({query:async(sql,args=[])=>{queries.push(sql);
    if(sql.includes('SELECT id,name FROM student_groups'))return{rows:[{id:gid,name:'المرحلة الأولى'}]};
-   if(sql.includes('SELECT id FROM attendance_lessons'))return{rows:[{id:lid}]};
+   if(sql.includes('SELECT id,period,subject FROM attendance_lessons'))return{rows:[{id:lid,period:1,subject:'فقه'}]};
    return{rows:[]};
  },release(){}})};
  const router=createAttendanceRouter({query:async()=>({rows:[]}),pool,id:()=>lid});
- const payload={groupId:gid,lessonDate:'2026-11-11',period:1,subject:'فقه',finalize:true,entries:[{studentId:uid,status:'absent'}]};
+ const payload={groupId:gid,lessonDate:'2026-11-11',subject:'فقه',finalize:true,entries:[{studentId:uid,status:'absent'}]};
  await assert.rejects(()=>call(router,'POST','/lessons',{id:other,role:'admin'},payload),{status:409});
  assert.ok(queries.some(s=>s==='ROLLBACK'));assert.equal(queries.some(s=>s.includes('UPDATE attendance_lessons')),false);
 });
@@ -41,11 +41,11 @@ test('admin can save all students and audit state changes atomically',async()=>{
  const sql=[];
  const pool={connect:async()=>({query:async(statement,args=[])=>{sql.push({statement,args});
    if(statement.includes('SELECT id,name FROM student_groups'))return{rows:[{id:gid,name:'المرحلة الأولى'}]};
-   if(statement.includes('SELECT id FROM attendance_lessons'))return{rows:[]};
+   if(statement.includes('SELECT id,period,subject FROM attendance_lessons'))return{rows:[]};
    if(statement.includes('FROM student_group_members'))return{rows:[{id:uid,name:'أحمد'},{id:other,name:'علي'}]};
    return{rows:[],rowCount:1};},release(){}})};
  const router=createAttendanceRouter({query:async()=>({rows:[]}),pool,id:()=>lid});
- const payload={groupId:gid,lessonDate:'2026-11-11',period:1,subject:'فقه',finalize:false,entries:[{studentId:uid,status:'absent'},{studentId:other,status:'present'}]};
+ const payload={groupId:gid,lessonDate:'2026-11-11',subject:'فقه',finalize:false,entries:[{studentId:uid,status:'absent'},{studentId:other,status:'present'}]};
  const result=await call(router,'POST','/lessons',{id:uid,role:'admin'},payload);
  assert.equal(result.status,201);assert.equal(result.body.ok,true);
  assert.equal(sql.filter(x=>x.statement.includes('INSERT INTO attendance_entries')).length,2);
