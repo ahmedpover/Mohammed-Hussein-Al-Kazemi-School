@@ -299,3 +299,57 @@
   .channel-poll-edit-row > span {flex-basis:18px}
   .channel-chat-composer .channel-poll-submit {width:100%}
 }
+
+/* v0.10.21 — Match chat bubbles to the school's existing light/dark palette.
+   Preserve compact Telegram-like geometry, but inherit the app's theme tokens. */
+.channel-conversation .channel-message {
+  --channel-bubble: #e6eee5;
+  --channel-bubble-text: var(--ink);
+  background:var(--channel-bubble);
+  color:var(--channel-bubble-text);
+  border:1px solid #cbdccf;
+  box-shadow:0 3px 10px rgba(29,65,45,.07);
+}
+.channel-conversation .channel-message-meta strong {color:#245a45}
+.channel-conversation .channel-message-meta .channel-delete {color:#976b63}
+.channel-conversation .channel-message-footer {color:#687e70}
+.channel-conversation .channel-image-missing {border-color:#b7c9bc;color:var(--ink)}
+.channel-conversation .channel-poll-title {color:var(--ink)}
+.channel-conversation .channel-poll-title svg {color:#2e7154}
+.channel-conversation .channel-poll-choice {
+  background:rgba(255,255,255,.52);
+  border:1px solid #cbdccf;
+  color:var(--ink);
+}
+.channel-conversation .channel-poll-choice.chosen {border-color:#397e5b;background:#d1e7d5}
+.channel-conversation .channel-poll-option-name svg {color:#2e7154}
+.channel-conversation .channel-choice-circle {border-color:#769a84}
+.channel-conversation .channel-poll-percent,
+.channel-conversation .channel-poll-footer {color:#60766a}
+.channel-conversation .channel-poll-meter {background:rgba(56,125,86,.16)}
+.channel-conversation .channel-poll .form-error {color:#a33f36}
+
+.app.dark .channel-conversation .channel-message {
+  --channel-bubble:#24453c;
+  --channel-bubble-text:#f0f4eb;
+  border-color:#3b6657;
+  box-shadow:0 3px 12px rgba(0,0,0,.13);
+}
+.app.dark .channel-conversation .channel-message-meta strong {color:#b5dfbd}
+.app.dark .channel-conversation .channel-message-meta .channel-delete {color:#e1b3a9}
+.app.dark .channel-conversation .channel-message-footer {color:#bbcec0}
+.app.dark .channel-conversation .channel-poll-title {color:#f0f4eb}
+.app.dark .channel-conversation .channel-poll-title svg {color:#b5dfbd}
+.app.dark .channel-conversation .channel-poll-choice {
+  background:rgba(255,255,255,.06);
+  border-color:#577568;
+  color:#f0f4eb;
+}
+.app.dark .channel-conversation .channel-poll-choice.chosen {border-color:#9fd1aa;background:#335f4b}
+.app.dark .channel-conversation .channel-poll-option-name svg {color:#b5dfbd}
+.app.dark .channel-conversation .channel-choice-circle {border-color:#a4c4af}
+.app.dark .channel-conversation .channel-poll-percent,
+.app.dark .channel-conversation .channel-poll-footer {color:#c3d3c5}
+.app.dark .channel-conversation .channel-poll-meter {background:rgba(142,206,151,.2)}
+.app.dark .channel-conversation .channel-image-missing {border-color:#577568;color:#f0f4eb}
+.app.dark .channel-conversation .channel-poll .form-error {color:#ffd1ce}
