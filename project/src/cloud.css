@@ -25,3 +25,25 @@
 
 .push-opt-in{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:16px;margin:12px 0;border:1px solid var(--line, #d8d1bc);border-radius:15px;background:var(--paper, #faf8f1)}
 .push-opt-in strong{font-size:1.05rem}.push-opt-in p{margin:5px 0;max-width:560px;line-height:1.7}.push-opt-in button{min-height:43px}
+
+/* Desktop: independently scrollable sidebar, including theme and sign-out. */
+@media (min-width: 801px) {
+ .cloud-app .desktop-sidebar {
+   position: sticky;
+   top: 0;
+   height: 100vh;
+   height: 100dvh;
+   min-height: 0;
+   max-height: 100dvh;
+   overflow-y: auto;
+   overflow-x: hidden;
+   overscroll-behavior-y: contain;
+   scrollbar-width: thin;
+   scrollbar-color: var(--line) transparent;
+ }
+ .cloud-app .desktop-sidebar .sidebar-head,
+ .cloud-app .desktop-sidebar .side-caption,
+ .cloud-app .desktop-sidebar .side-nav,
+ .cloud-app .desktop-sidebar .sidebar-bottom { flex-shrink: 0; }
+ .cloud-app .desktop-sidebar .sidebar-bottom { padding-top: 18px; padding-bottom: 12px; }
+}
