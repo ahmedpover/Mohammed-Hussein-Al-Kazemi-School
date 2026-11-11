@@ -150,8 +150,23 @@ export default function App() {
       catch { saved = false; }
     }
     const published = { ...post, imageName: image?.name || null, imageUrl: image ? URL.createObjectURL(image) : null };
-    setChannels(old => old.map(channel => channel.id === channelId ? { ...channel, posts: [published, ...(channel.posts || [])] } : channel));
+    setChannels(old => old.map(channel => channel.id === channelId ? { ...channel, posts: [...(channel.posts || []), published] } : channel));
     flash(saved ? 'نُشر المنشور في معاينة القناة' : 'نُشر المنشور؛ قد تختفي صورته عند إعادة تحميل الصفحة');
+  };
+  const publishPoll = async (channelId, {question,options}) => {
+    const published={id:crypto.randomUUID(),text:'',date:new Intl.DateTimeFormat('ar-IQ',{day:'numeric',month:'long',year:'numeric'}).format(new Date()),poll:{question,options,counts:options.map(()=>0),total:0,myVote:null}};
+    setChannels(old=>old.map(channel=>channel.id===channelId?{...channel,posts:[...(channel.posts||[]),published]}:channel));
+    flash('نُشر الاستفتاء في المعاينة');
+  };
+  const voteOnPoll = async (postId, choice) => {
+    setChannels(old=>old.map(channel=>({...channel,posts:(channel.posts||[]).map(post=>{
+      if(post.id!==postId || !post.poll)return post;
+      const poll=post.poll;
+      const counts=[...poll.counts];
+      if(Number.isInteger(poll.myVote))counts[poll.myVote]=Math.max(0,counts[poll.myVote]-1);
+      counts[choice]++;
+      return {...post,poll:{...poll,counts,myVote:choice,total:counts.reduce((a,b)=>a+b,0)}};
+    })})));
   };
   const deletePost = async (channelId, postId) => {
     if (!window.confirm('حذف هذا المنشور؟')) return;
@@ -222,7 +237,7 @@ export default function App() {
               onCreate={channel => { setChannels(old => [{ ...channel, ownerId: user.id }, ...old]); flash('أُنشئت قناة المادة'); }}
               onJoin={id => { setJoinedByUser(old => ({ ...old, [user.id]: old[user.id]?.includes(id) ? old[user.id] : [...(old[user.id] || []), id] })); flash('انضممت إلى القناة'); }}
               onLeave={id => { setJoinedByUser(old => ({ ...old, [user.id]: (old[user.id] || []).filter(item => item !== id) })); flash('غادرت القناة'); }}
-              onPost={publishPost} onDeletePost={deletePost} onDeleteChannel={deleteChannel} />}
+              onPost={publishPost} onPoll={publishPoll} onVote={voteOnPoll} onDeletePost={deletePost} onDeleteChannel={deleteChannel} />}
             {(page === 'subjects' || page === 'lectures' || subject) && <>
               {!subject && page === 'subjects' && <SubjectGrid lectures={lectures} onSubject={setSubject} />}
               {(subject || page === 'lectures') && <LectureList lectures={matches.filter(l => !subject || subjectKey(l) === subject)} role={role} query={query} onQuery={setQuery} onOpen={openLecture} onDelete={deleteLecture} onEdit={lecture => { setEditing(lecture); setShowCreate(true); }} />}

@@ -63,3 +63,42 @@
 @media(max-width:620px){.channels-intro,.channel-card,.channel-search,.channel-post,.channel-composer,.channel-empty,.channel-join-required{padding:17px}.channels-intro h3{font-size:25px}.channel-cover{padding:18px;gap:12px}.channel-cover h3{font-size:27px}.channel-emblem{width:50px;height:50px}.channel-search>div{gap:7px}.channel-search button{padding:8px 11px}.channel-composer-bottom{align-items:stretch;flex-direction:column}.channel-file-button{max-width:100%;min-height:38px}.channel-composer-bottom>.primary-button{width:100%}}
 
 .channel-lectures-section{margin:22px 0 28px}.channel-lectures-section .channel-posts-head h3{display:flex;align-items:center;gap:8px}.channel-lecture-files{display:flex;align-items:center;gap:8px;color:var(--muted);padding-inline:10px}.channel-lecture-files svg{flex:none}
+
+/* One shared chat-like channel interface for both desktop and mobile. */
+.channel-conversation{display:grid;gap:13px;min-width:0}
+.channel-conversation .channel-posts-head h3{display:flex;align-items:center;gap:9px}
+.channel-conversation .channel-feed{background:var(--surface-soft);border:1px solid var(--line);border-radius:12px;padding:20px;display:flex;flex-direction:column;align-items:stretch;gap:11px;min-width:0}
+.channel-conversation .channel-message{align-self:flex-start;max-width:min(86%,700px);min-width:min(280px,100%);background:var(--surface);border:1px solid var(--line);border-radius:13px 13px 4px 13px;box-shadow:0 2px 8px #00000009;overflow:hidden}
+.channel-message-main{padding:12px 15px;min-width:0}
+.channel-message-meta{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:12px}
+.channel-message-meta strong{color:var(--teal);font-size:13px}
+.channel-message-meta span{color:var(--muted);font-size:11px;flex:1}
+.channel-message-meta .channel-delete{margin-inline-start:auto}
+.channel-message p{line-height:1.9;font-size:14px;margin:0 0 7px;white-space:pre-wrap;overflow-wrap:anywhere}
+.channel-message img{display:block;max-width:100%;max-height:420px;object-fit:contain;margin-top:9px;border-radius:8px;border:1px solid var(--line)}
+.channel-chat-composer{border-radius:12px;max-width:none}
+.channel-compose-tabs{display:flex;gap:7px;border-bottom:1px solid var(--line);padding-bottom:11px}
+.channel-compose-tabs button{display:flex;gap:7px;align-items:center;border:1px solid transparent;background:transparent;color:var(--muted);border-radius:7px;padding:9px 13px;font:inherit;font-size:13px;font-weight:700;cursor:pointer}
+.channel-compose-tabs button.selected{background:var(--surface-soft);color:var(--teal);border-color:var(--line)}
+.channel-chat-composer .primary-button{display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.channel-chat-composer>input{width:100%;min-height:45px;background:var(--surface-soft);border:1px solid var(--line);color:var(--ink);padding:9px 13px;border-radius:7px;font:inherit}
+.channel-poll-editor{display:grid;gap:9px}
+.channel-poll-edit-row{display:flex;gap:9px;align-items:center}
+.channel-poll-edit-row>span{color:var(--muted);font-size:13px;min-width:18px}
+.channel-poll-edit-row input{flex:1;min-width:0;border:1px solid var(--line);border-radius:7px;background:var(--surface-soft);color:var(--ink);padding:10px;font:inherit;font-size:14px}
+.channel-poll-edit-row button,.channel-add-option{border:0;background:transparent;color:var(--teal);cursor:pointer;display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;font-weight:700}
+.channel-add-option{justify-self:start;padding:9px 0}
+.channel-poll-submit{justify-self:start}
+.channel-poll{display:grid;gap:10px;padding:7px 0 4px}
+.channel-poll-title{display:flex;align-items:flex-start;gap:9px;font-size:15px;color:var(--ink)}
+.channel-poll-title svg{color:var(--teal);flex:none;margin-top:2px}
+.channel-poll-options{display:grid;gap:7px}
+.channel-poll-choice{position:relative;overflow:hidden;text-align:start;display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;border:1px solid var(--line);background:var(--surface-soft);border-radius:8px;padding:10px 11px;color:var(--ink);font:inherit;font-size:13px;cursor:pointer;min-height:43px}
+.channel-poll-choice.chosen{border-color:var(--teal)}
+.channel-poll-meter{position:absolute;inset-block:0;inset-inline-start:0;background:color-mix(in srgb,var(--teal) 18%,transparent);pointer-events:none;transition:width .25s ease}
+.channel-poll-option-name,.channel-poll-percent{position:relative;z-index:1;display:flex;align-items:center;gap:9px}
+.channel-poll-option-name svg{color:var(--teal);flex:none}
+.channel-choice-circle{height:15px;width:15px;border-radius:50%;border:1.5px solid var(--muted);flex:none}
+.channel-poll-percent{font-size:12px;color:var(--muted);white-space:nowrap}
+.channel-poll-footer{font-size:12px;color:var(--muted)}
+@media(max-width:700px){.channel-conversation .channel-feed{padding:12px;gap:9px}.channel-conversation .channel-message{max-width:96%;min-width:min(225px,100%)}.channel-message-main{padding:11px}.channel-chat-composer{padding:14px}.channel-poll-submit{width:100%}}
