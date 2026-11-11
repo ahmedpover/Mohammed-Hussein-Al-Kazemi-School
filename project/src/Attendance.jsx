@@ -11,7 +11,7 @@ function exportExcel(report){
  import('./attendance-xlsx.js').then(({makeAttendanceWorkbook})=>{
    const blob=makeAttendanceWorkbook(report);
    const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;
-   link.download=`attendance-${report.month}.xml`;document.body.appendChild(link);link.click();link.remove();
+   link.download=`attendance-${report.month}.xlsx`;document.body.appendChild(link);link.click();link.remove();
    setTimeout(()=>URL.revokeObjectURL(url),1500);
  }).catch(error=>window.alert(`تعذّر تصدير ملف Excel: ${error.message}`));
 }

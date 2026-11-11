@@ -12,7 +12,7 @@ export async function initAttendanceTables(query){
     group_id uuid REFERENCES student_groups(id) ON DELETE SET NULL,
     group_name text NOT NULL,
     lesson_date date NOT NULL,
-    period smallint NOT NULL CHECK(period BETWEEN 1 AND 12),
+    period smallint NOT NULL CHECK(period BETWEEN 1 AND 32767),
     subject text NOT NULL CHECK(length(subject) BETWEEN 1 AND 100),
     finalized boolean NOT NULL DEFAULT false,
     created_by uuid REFERENCES users(id) ON DELETE SET NULL,
