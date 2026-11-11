@@ -16,9 +16,6 @@ export const removeChannel=channel=>api(`/channels/${channel.id}`,{method:'DELET
 export const joinChannel=(_uid,id)=>api(`/channels/${id}/join`,{method:'POST'});
 export const leaveChannel=(_uid,id)=>api(`/channels/${id}/join`,{method:'DELETE'});
 export async function createPost(_user,id,{text,image}) { const body=new FormData();body.set('text',text);if(image)body.set('image',image);return api(`/channels/${id}/posts`,{method:'POST',body}); }
-export const createPoll=(channelId,poll)=>json(`/channels/${channelId}/polls`,'POST',poll);
-export const votePoll=(pollId,optionIndex)=>json(`/polls/${pollId}/vote`,'POST',{optionIndex});
-export const closePoll=pollId=>api(`/polls/${pollId}/close`,{method:'POST'});
 export const removePost=(_id,post)=>api(`/posts/${post.id}`,{method:'DELETE'});
 export async function saveLecture(_user,payload,current){const {audio,pdf,...details}=payload;const result=current?await json(`/lectures/${current.id}`,'PUT',details):await json('/lectures','POST',details);const id=current?.id||result.id;for(const [kind,file] of [['audio',audio],['pdf',pdf]])if(file){const body=new FormData();body.set('file',file);await api(`/lectures/${id}/media/${kind}`,{method:'POST',body});}return id;}
 export const removeLecture=item=>api(`/lectures/${item.id}`,{method:'DELETE'});

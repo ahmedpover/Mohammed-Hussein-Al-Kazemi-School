@@ -2,7 +2,7 @@ import { getPushPublicKey, validSubscription, sendWebPush } from './web-push.js'
 import { sendMedia } from './media-response.js';
 import { provisionAdmins } from './admin-bootstrap.js';
 import { createQuestionsRouter, initQuestionTables } from './questions.js';
-import { validatePoll, validVoteIndex } from './poll-policy.js';
+import { createAttendanceRouter, initAttendanceTables } from './attendance.js';
 import express from 'express';
 import pg from 'pg';
 import multer from 'multer';
@@ -63,17 +63,7 @@ async function init() {
  CREATE TABLE IF NOT EXISTS student_group_members(group_id uuid NOT NULL REFERENCES student_groups(id) ON DELETE CASCADE,student_id uuid NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(group_id,student_id));`);
  await provisionAdmins({ query, hash, verify, id });
  await initQuestionTables(query);
- await query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS poll_question text;
- ALTER TABLE posts ADD COLUMN IF NOT EXISTS poll_options jsonb;
- ALTER TABLE posts ADD COLUMN IF NOT EXISTS poll_closed boolean NOT NULL DEFAULT false;
- CREATE TABLE IF NOT EXISTS poll_votes(
-  post_id uuid NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  voter_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  option_index integer NOT NULL CHECK(option_index BETWEEN 0 AND 9),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY(post_id,voter_id)
- );
- CREATE INDEX IF NOT EXISTS poll_votes_post_idx ON poll_votes(post_id);`);
+ await initAttendanceTables(query);
 }
 // Delivery is best effort: publishing content must never fail because a push provider is offline.
 async function pushToStudents(studentIdsSql, params, notification) {
@@ -134,6 +124,7 @@ app.delete('/api/auth/account',requireUser,wrap(async(req,res)=>{
 }));
 app.get('/api/me',requireUser,wrap(async(req,res)=>{ const {id,email,name,role,subjects}=req.actor; res.json({id,email,name,role,subjects}); }));
 app.get('/api/data',requireUser,wrap(async(req,res)=>{ const user=req.actor; const [c,l,j,i,n]=await Promise.all([query('SELECT id,handle,name,subject,book,description,owner_id AS "ownerId",teacher_name AS "teacherName",created_at AS "createdAt" FROM channels ORDER BY created_at DESC'),query(`SELECT l.id,l.title,l.subject,l.book,l.description,l.owner_id AS "ownerId",l.teacher_name AS "teacherName",l.channel_id AS "channelId",c.name AS "channelName",l.created_at AS "createdAt",EXISTS(SELECT 1 FROM media m WHERE m.lecture_id=l.id AND kind='audio') AS "hasAudio",EXISTS(SELECT 1 FROM media m WHERE m.lecture_id=l.id AND kind='pdf') AS "hasPdf" FROM lectures l LEFT JOIN channels c ON c.id=l.channel_id WHERE ($1::text='admin' OR ($1::text='teacher' AND l.owner_id=$2) OR ($1::text='student' AND l.channel_id IS NOT NULL AND EXISTS(SELECT 1 FROM memberships mb WHERE mb.user_id=$2 AND mb.channel_id=l.channel_id))) ORDER BY l.created_at DESC`,[user.role,user.id]),query('SELECT channel_id FROM memberships WHERE user_id=$1',[user.id]),user.role==='admin'?query('SELECT email,name,subjects,active FROM invites ORDER BY name'):Promise.resolve({rows:[]}),query('SELECT id,message,created_at AS "createdAt",read_at AS "readAt" FROM notifications WHERE student_id=$1 ORDER BY created_at DESC LIMIT 100',[user.id])]); res.json({channels:c.rows,lectures:l.rows.map(x=>({...x,audioUrl:x.hasAudio?`/api/lectures/${x.id}/media/audio`:'',pdfUrl:x.hasPdf?`/api/lectures/${x.id}/media/pdf`:''})),joined:j.rows.map(x=>x.channel_id),invites:i.rows,notifications:n.rows}); }));
+app.use('/api/attendance',requireUser,createAttendanceRouter({query,pool,id}));
 app.get('/api/admin/channel-teachers',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT u.id,i.name,u.email,i.subjects FROM users u JOIN invites i ON i.email=u.email WHERE u.role='teacher' AND i.active=true ORDER BY i.name,u.email`); res.json(rows); }));
 app.get('/api/admin/students',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT u.id,u.name,u.email,u.course_number AS "courseNumber",u.created_at AS "createdAt",COALESCE(json_agg(DISTINCT c.subject) FILTER(WHERE c.subject IS NOT NULL),'[]'::json) AS subjects,COUNT(DISTINCT m.channel_id)::int AS "channelCount" FROM users u LEFT JOIN memberships m ON m.user_id=u.id LEFT JOIN channels c ON c.id=m.channel_id WHERE u.role='student' GROUP BY u.id ORDER BY u.created_at DESC`); res.json(rows); }));
 app.get('/api/admin/student-groups',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT g.id,g.name,g.created_at AS "createdAt",COUNT(gm.student_id)::int AS "studentCount" FROM student_groups g LEFT JOIN student_group_members gm ON gm.group_id=g.id GROUP BY g.id ORDER BY g.created_at DESC`);res.json(rows); }));
@@ -142,7 +133,7 @@ app.get('/api/admin/student-groups/unassigned',requireUser,wrap(async(req,res)=>
 app.get('/api/admin/student-groups/:id/students',requireUser,wrap(async(req,res)=>{admin(req);const {rows:groups}=await query('SELECT id,name FROM student_groups WHERE id=$1',[req.params.id]);if(!groups.length)throw fail(404,'المجموعة غير موجودة.');const {rows:students}=await query(`SELECT u.id,u.name,u.email,u.course_number AS "courseNumber",gm.created_at AS "addedAt" FROM student_group_members gm JOIN users u ON u.id=gm.student_id WHERE gm.group_id=$1 ORDER BY u.name`,[req.params.id]);res.json({group:groups[0],students});}));
 app.post('/api/admin/student-groups/:id/members',requireUser,wrap(async(req,res)=>{admin(req);const studentIds=[...new Set(Array.isArray(req.body?.studentIds)?req.body.studentIds:[])];if(!studentIds.length||studentIds.length>500)throw fail(400,'حدد طالبًا واحدًا على الأقل.');const {rowCount}=await query('SELECT 1 FROM student_groups WHERE id=$1',[req.params.id]);if(!rowCount)throw fail(404,'المجموعة غير موجودة.');const client=await pool.connect();try{await client.query('BEGIN');const {rows}=await client.query(`SELECT id FROM users WHERE id=ANY($1::uuid[]) AND role='student' FOR UPDATE`,[studentIds]);if(rows.length!==studentIds.length)throw fail(400,'بعض الحسابات المحددة غير موجودة أو ليست حسابات طلاب.');const {rows:existing}=await client.query('SELECT student_id FROM student_group_members WHERE student_id=ANY($1::uuid[])',[studentIds]);if(existing.length)throw fail(409,'أحد الطلاب المحددين أصبح ضمن مجموعة أخرى؛ حدّث القائمة وحاول مجددًا.');for(const studentId of studentIds)await client.query('INSERT INTO student_group_members(group_id,student_id) VALUES($1,$2)',[req.params.id,studentId]);await client.query('COMMIT');}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}res.json({ok:true,added:studentIds.length});}));
 app.delete('/api/admin/student-groups/:groupId/members/:studentId',requireUser,wrap(async(req,res)=>{admin(req);const {rowCount}=await query('DELETE FROM student_group_members WHERE group_id=$1 AND student_id=$2',[req.params.groupId,req.params.studentId]);if(!rowCount)throw fail(404,'الطالب غير موجود في هذه المجموعة.');res.json({ok:true});}));
-app.delete('/api/admin/student-groups/:id',requireUser,wrap(async(req,res)=>{admin(req);const {rowCount}=await query('DELETE FROM student_groups WHERE id=$1',[req.params.id]);if(!rowCount)throw fail(404,'المجموعة غير موجودة.');res.json({ok:true});}));
+app.delete('/api/admin/student-groups/:id',requireUser,wrap(async(req,res)=>{admin(req);const {rowCount:hasLessons}=await query('SELECT 1 FROM attendance_lessons WHERE group_id=$1 LIMIT 1',[req.params.id]);if(hasLessons)throw fail(409,'لا يمكن حذف شعبة لها سجلات حضور؛ احتفظ بها لأجل التقارير السابقة.');const {rowCount}=await query('DELETE FROM student_groups WHERE id=$1',[req.params.id]);if(!rowCount)throw fail(404,'المجموعة غير موجودة.');res.json({ok:true});}));
 app.get('/api/admin/students/:id',requireUser,wrap(async(req,res)=>{ admin(req); const {rows}=await query(`SELECT id,name,email,course_number AS "courseNumber",created_at AS "createdAt" FROM users WHERE id=$1 AND role='student'`,[req.params.id]);if(!rows.length)throw fail(404,'الطالب غير موجود.');const {rows:channels}=await query(`SELECT c.id,c.name,c.subject,c.book,c.handle FROM memberships m JOIN channels c ON c.id=m.channel_id WHERE m.user_id=$1 ORDER BY c.subject,c.name`,[req.params.id]);res.json({...rows[0],channels}); }));
 async function deleteAccountRecords(client,userId){
  await client.query('DELETE FROM posts WHERE owner_id=$1',[userId]);
@@ -181,13 +172,7 @@ app.delete('/api/admin/teachers/:email',requireUser,wrap(async(req,res)=>{
 app.patch('/api/admin/students/:id',requireUser,wrap(async(req,res)=>{ admin(req); const value=String(req.body.courseNumber||'').trim();if(value.length>30)throw fail(400,'رقم الدورة طويل جدًا.');const {rowCount}=await query(`UPDATE users SET course_number=$1 WHERE id=$2 AND role='student'`,[value||null,req.params.id]);if(!rowCount)throw fail(404,'الطالب غير موجود.');res.json({ok:true}); }));
 app.post('/api/admin/students/:id/notifications',requireUser,wrap(async(req,res)=>{ admin(req);const message=String(req.body.message||'').trim();if(message.length<1||message.length>1000)throw fail(400,'اكتب إشعارًا من ١ إلى ١٠٠٠ حرف.');const {rowCount}=await query(`SELECT 1 FROM users WHERE id=$1 AND role='student'`,[req.params.id]);if(!rowCount)throw fail(404,'الطالب غير موجود.');await query(`INSERT INTO notifications(id,student_id,sender_id,message) VALUES($1,$2,$3,$4)`,[id(),req.params.id,req.actor.id,message]);pushStudent(req.params.id,{title:'إشعار من إدارة المدرسة',body:message,url:'/?page=notifications'});res.status(201).json({ok:true}); }));
 app.patch('/api/notifications/:id/read',requireUser,wrap(async(req,res)=>{ const {rowCount}=await query(`UPDATE notifications SET read_at=COALESCE(read_at,now()) WHERE id=$1 AND student_id=$2`,[req.params.id,req.actor.id]);if(!rowCount)throw fail(404,'الإشعار غير موجود.');res.json({ok:true}); }));
-app.get('/api/channels/:id/posts',requireUser,wrap(async(req,res)=>{ const {rows:channels}=await query('SELECT owner_id FROM channels WHERE id=$1',[req.params.id]); if(!channels.length) throw fail(404,'القناة غير موجودة.'); if(req.actor.role!=='admin' && channels[0].owner_id!==req.actor.id) { const {rowCount}=await query('SELECT 1 FROM memberships WHERE user_id=$1 AND channel_id=$2',[req.actor.id,req.params.id]); if(!rowCount) throw fail(403,'انضم إلى القناة أولاً.'); } const {rows}=await query(`SELECT p.id,p.text,p.created_at AS "createdAt",p.image IS NOT NULL AS "hasImage",
- p.poll_question AS "pollQuestion",p.poll_options AS "pollOptions",p.poll_closed AS "pollClosed",
- CASE WHEN p.owner_id=c.owner_id THEN c.teacher_name ELSE COALESCE(u.name,'إدارة المدرسة') END AS "authorName",
- (SELECT json_object_agg(option_index,total) FROM
-   (SELECT option_index,COUNT(*)::integer AS total FROM poll_votes WHERE post_id=p.id GROUP BY option_index) v) AS "pollCounts",
- (SELECT option_index FROM poll_votes WHERE post_id=p.id AND voter_id=$2) AS "myVote"
- FROM posts p JOIN channels c ON c.id=p.channel_id LEFT JOIN users u ON u.id=p.owner_id WHERE p.channel_id=$1 ORDER BY p.created_at DESC,p.id DESC`,[req.params.id,req.actor.id]); res.json(rows.map(x=>({...x,imageUrl:x.hasImage?`/api/posts/${x.id}/image`:''}))); }));
+app.get('/api/channels/:id/posts',requireUser,wrap(async(req,res)=>{ const {rows:channels}=await query('SELECT owner_id FROM channels WHERE id=$1',[req.params.id]); if(!channels.length) throw fail(404,'القناة غير موجودة.'); if(req.actor.role!=='admin' && channels[0].owner_id!==req.actor.id) { const {rowCount}=await query('SELECT 1 FROM memberships WHERE user_id=$1 AND channel_id=$2',[req.actor.id,req.params.id]); if(!rowCount) throw fail(403,'انضم إلى القناة أولاً.'); } const {rows}=await query('SELECT id,text,created_at AS "createdAt",image IS NOT NULL AS "hasImage" FROM posts WHERE channel_id=$1 ORDER BY created_at DESC',[req.params.id]); res.json(rows.map(x=>({...x,imageUrl:x.hasImage?`/api/posts/${x.id}/image`:''}))); }));
 app.post('/api/invites',requireUser,wrap(async(req,res)=>{ admin(req); const email=emailKey(req.body.email),name=clean(req.body.name,70),subjects=[...new Set((Array.isArray(req.body.subjects)?req.body.subjects:[]).map(x=>clean(x,80)))]; if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!valid(name,70)||!subjects.length||subjects.length>20||subjects.some(x=>!valid(x,80))) throw fail(400,'تحقق من بيانات الأستاذ والمواد.'); const requested=String(req.body.inviteCode||'').trim();if(requested && !/^[A-Za-z0-9_-]{12,64}$/.test(requested))throw fail(400,'رمز الدعوة يجب أن يكون ١٢ إلى ٦٤ حرفًا إنجليزيًا أو رقمًا.');const code=requested||randomBytes(18).toString('base64url'); await query('INSERT INTO invites(email,name,subjects,active,code_hash) VALUES($1,$2,$3,$4,$5) ON CONFLICT(email) DO UPDATE SET name=$2,subjects=$3,active=$4,code_hash=$5',[email,name,JSON.stringify(subjects),req.body.active===true,digestToken(code)]); res.json({ok:true,inviteCode:code}); }));
 app.post('/api/channels',requireUser,wrap(async(req,res)=>{
  const {name,subject,book,description='',handle,teacherId}=req.body;
@@ -212,50 +197,6 @@ app.delete('/api/channels/:id/join',requireUser,wrap(async(req,res)=>{ await que
 const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:25*1024*1024,files:1}});
 const lectureUpload=multer({storage:multer.memoryStorage(),limits:{fileSize:100*1024*1024,files:1}});
 app.post('/api/channels/:id/posts',requireUser,upload.single('image'),wrap(async(req,res)=>{ await owner(req,'channels',req.params.id); const body=clean(req.body.text,3000),file=req.file; if(body.length>3000 || (!body&&!file) || (file && (!['image/png','image/jpeg','image/webp'].includes(file.mimetype)||file.size>5*1024*1024))) throw fail(400,'المنشور أو الصورة غير صالحة.'); await query('INSERT INTO posts(id,channel_id,owner_id,text,image,image_type) VALUES($1,$2,$3,$4,$5,$6)',[id(),req.params.id,req.actor.id,body,file?.buffer||null,file?.mimetype||null]); pushChannel(req.params.id,{title:'منشور جديد في قناة',body:body.slice(0,150)||'نشر الأستاذ صورة جديدة في القناة',url:'/?page=channels'});res.status(201).json({ok:true}); }));
-// A poll is a channel post; only the channel's teacher or an administrator can create/close one.
-app.post('/api/channels/:id/polls',requireUser,wrap(async(req,res)=>{
- await owner(req,'channels',req.params.id);
- let poll;
- try { poll=validatePoll(req.body); } catch(error) { throw fail(400,error.message); }
- const postId=id();
- await query(`INSERT INTO posts(id,channel_id,owner_id,text,poll_question,poll_options)
-  VALUES($1,$2,$3,'',$4,$5::jsonb)`,[postId,req.params.id,req.actor.id,poll.question,JSON.stringify(poll.options)]);
- pushChannel(req.params.id,{title:'استفتاء جديد في القناة',body:poll.question,url:'/?page=channels'});
- res.status(201).json({id:postId});
-}));
-app.post('/api/polls/:id/vote',requireUser,wrap(async(req,res)=>{
- if(req.actor.role!=='student')throw fail(403,'التصويت مخصص لطلاب القناة.');
- const selected=req.body?.optionIndex;
- // Membership and open state are verified inside the INSERT as well, so a forged request cannot vote.
- const {rows}=await query(`SELECT p.poll_options AS options,p.poll_closed AS closed,
- EXISTS(SELECT 1 FROM memberships m WHERE m.user_id=$2 AND m.channel_id=p.channel_id) AS joined
- FROM posts p WHERE p.id=$1 AND p.poll_question IS NOT NULL`,[req.params.id,req.actor.id]);
- const poll=rows[0];
- if(!poll)throw fail(404,'الاستفتاء غير موجود.');
- if(!poll.joined)throw fail(403,'انضم إلى القناة أولاً للتصويت.');
- if(poll.closed)throw fail(409,'انتهى التصويت في هذا الاستفتاء.');
- if(!validVoteIndex(selected,poll.options.length))throw fail(400,'اختر إجابة صالحة.');
- const result=await query(`INSERT INTO poll_votes(post_id,voter_id,option_index)
- SELECT p.id,$2,$3 FROM posts p WHERE p.id=$1 AND p.poll_question IS NOT NULL
- AND p.poll_closed=false AND jsonb_array_length(p.poll_options)>$3
- AND EXISTS(SELECT 1 FROM memberships m WHERE m.channel_id=p.channel_id AND m.user_id=$2)
- ON CONFLICT(post_id,voter_id) DO UPDATE SET option_index=EXCLUDED.option_index,created_at=now()
- RETURNING post_id`,[req.params.id,req.actor.id,selected]);
- if(!result.rowCount)throw fail(409,'تعذر التصويت؛ ربما أُغلق الاستفتاء أو غادرت القناة.');
- res.json({ok:true});
-}));
-app.post('/api/polls/:id/close',requireUser,wrap(async(req,res)=>{
- const {rows}=await query(`SELECT p.id,p.poll_closed,c.id AS channel_id,c.owner_id,c.subject
- FROM posts p JOIN channels c ON c.id=p.channel_id WHERE p.id=$1 AND p.poll_question IS NOT NULL`,[req.params.id]);
- const poll=rows[0];
- if(!poll)throw fail(404,'الاستفتاء غير موجود.');
- if(req.actor.role!=='admin'){
-   if(poll.owner_id!==req.actor.id)throw fail(403,'هذا الاستفتاء ليس في قناتك.');
-   teaches(req,poll.subject);
- }
- await query('UPDATE posts SET poll_closed=true WHERE id=$1',[req.params.id]);
- res.json({ok:true});
-}));
 app.delete('/api/posts/:id',requireUser,wrap(async(req,res)=>{ const {rows}=await query('SELECT c.* FROM posts p JOIN channels c ON c.id=p.channel_id WHERE p.id=$1',[req.params.id]); if(!rows.length) throw fail(404,'المنشور غير موجود.'); if(req.actor.role!=='admin'){if(rows[0].owner_id!==req.actor.id)throw fail(403,'غير مسموح.');teaches(req,rows[0].subject);} await query('DELETE FROM posts WHERE id=$1',[req.params.id]); res.json({ok:true}); }));
 app.get('/api/posts/:id/image',requireUser,wrap(async(req,res)=>{ const {rows}=await query('SELECT p.image,p.image_type,p.channel_id,c.owner_id FROM posts p JOIN channels c ON c.id=p.channel_id WHERE p.id=$1',[req.params.id]); const p=rows[0]; if(!p?.image) throw fail(404,'الصورة غير موجودة.'); if(req.actor.role!=='admin' && p.owner_id!==req.actor.id){ const {rowCount}=await query('SELECT 1 FROM memberships WHERE user_id=$1 AND channel_id=$2',[req.actor.id,p.channel_id]);if(!rowCount)throw fail(403,'غير مسموح.');}res.type(p.image_type);res.set('Cache-Control','private, no-store');res.send(p.image); }));
 async function lectureChannel(req,channelId){ if(!channelId) throw fail(400,'اختر القناة التي تريد نشر المحاضرة فيها.'); const {rows}=await query('SELECT id,subject,book,owner_id FROM channels WHERE id=$1',[channelId]); const channel=rows[0]; if(!channel) throw fail(404,'القناة المحددة غير موجودة.'); if(req.actor.role!=='admin'){ if(req.actor.role!=='teacher'||channel.owner_id!==req.actor.id) throw fail(403,'يمكنك نشر المحاضرة في قنواتك أنت فقط.'); teaches(req,channel.subject); } return channel; }
