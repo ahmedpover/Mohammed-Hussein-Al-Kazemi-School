@@ -102,3 +102,200 @@
 .channel-poll-percent{font-size:12px;color:var(--muted);white-space:nowrap}
 .channel-poll-footer{font-size:12px;color:var(--muted)}
 @media(max-width:700px){.channel-conversation .channel-feed{padding:12px;gap:9px}.channel-conversation .channel-message{max-width:96%;min-width:min(225px,100%)}.channel-message-main{padding:11px}.channel-chat-composer{padding:14px}.channel-poll-submit{width:100%}}
+
+/* v0.10.20 — One responsive Telegram-like conversation UI on phone and laptop.
+   Keep every form grid track shrinkable: long Arabic placeholders must not set
+   a minimum width wider than a small device viewport. */
+.channels-area,
+.channels-area > *,
+.channel-conversation,
+.channel-conversation .channel-feed,
+.channel-chat-composer,
+.channel-chat-composer > *,
+.channel-poll-editor,
+.channel-poll-edit-row,
+.channel-poll-options,
+.channel-poll-choice,
+.channel-poll-option-name {
+  min-width:0;
+  max-width:100%;
+  box-sizing:border-box;
+}
+.channels-area {grid-template-columns:minmax(0,1fr)}
+.channel-chat-composer,
+.channel-poll-editor,
+.channel-poll-options {grid-template-columns:minmax(0,1fr)}
+.channel-chat-composer {width:100%;overflow-wrap:anywhere}
+.channel-chat-composer > input,
+.channel-chat-composer > textarea {
+  display:block;
+  width:100%;
+  max-width:100%;
+  min-width:0;
+  margin-inline:0;
+  box-sizing:border-box;
+}
+.channel-poll-edit-row {width:100%;gap:8px}
+.channel-poll-edit-row > span {flex:0 0 22px;min-width:0;text-align:center}
+.channel-poll-edit-row > input {
+  flex:1 1 0;
+  width:1%;
+  min-width:0;
+  max-width:100%;
+  box-sizing:border-box;
+  margin:0;
+}
+.channel-poll-edit-row > button {flex:0 0 32px;min-width:32px;min-height:36px;justify-content:center}
+.channel-compose-tabs {min-width:0;max-width:100%;flex-wrap:wrap}
+.channel-compose-tabs button {min-width:0;white-space:normal}
+.channel-chat-composer .channel-poll-submit {max-width:100%}
+
+/* Telegram-inspired message bubble: compact, content-width, dark navy,
+   channel name above the message and its time in the lower corner. */
+.channel-conversation .channel-feed {
+  display:flex;
+  flex-direction:column;
+  direction:rtl;
+  align-items:stretch;
+  gap:12px;
+  background:var(--surface-soft);
+  border:1px solid var(--line);
+  border-radius:17px;
+  padding:18px 22px;
+  overflow:visible;
+}
+.channel-conversation .channel-message {
+  --channel-bubble:#203442;
+  --channel-bubble-text:#f5f8fb;
+  position:relative;
+  align-self:flex-start;
+  flex:none;
+  width:max-content;
+  max-width:min(88%,640px);
+  min-width:0;
+  background:var(--channel-bubble);
+  color:var(--channel-bubble-text);
+  border:0;
+  border-radius:17px 17px 5px 17px;
+  box-shadow:0 3px 10px rgba(14,25,31,.13);
+  overflow:visible;
+  overflow-wrap:anywhere;
+  word-break:normal;
+}
+.channel-conversation .channel-message::after {
+  content:"";
+  position:absolute;
+  inset-inline-start:-8px;
+  bottom:0;
+  width:12px;
+  height:16px;
+  background:var(--channel-bubble);
+  clip-path:polygon(0 0,0 100%,100% 100%);
+}
+.channel-conversation .channel-message-main {
+  min-width:0;
+  padding:12px 16px 9px;
+  color:inherit;
+}
+.channel-conversation .channel-message-meta {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  min-width:0;
+  margin:0 0 6px;
+  line-height:1.6;
+}
+.channel-conversation .channel-message-meta strong {
+  flex:1;
+  min-width:0;
+  color:#62b8e8;
+  font-size:13px;
+  font-weight:700;
+  overflow-wrap:anywhere;
+}
+.channel-conversation .channel-message-meta .channel-delete {
+  color:#d7b7b1;
+  margin-inline-start:auto;
+  min-height:30px;
+  min-width:30px;
+  padding:5px;
+}
+.channel-conversation .channel-message p {
+  color:var(--channel-bubble-text);
+  font-size:15px;
+  line-height:1.85;
+  margin:0;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+}
+.channel-conversation .channel-message img {
+  display:block;
+  max-width:100%;
+  height:auto;
+  max-height:410px;
+  margin-top:9px;
+  object-fit:contain;
+  background:transparent;
+  border:0;
+  border-radius:9px;
+}
+.channel-conversation .channel-message-footer {
+  display:flex;
+  justify-content:flex-start;
+  align-items:center;
+  min-width:0;
+  margin-top:7px;
+  color:#aabac7;
+  font-family:inherit;
+  font-size:11px;
+  line-height:1.3;
+}
+.channel-conversation .channel-message-footer time {direction:rtl;unicode-bidi:plaintext}
+.channel-conversation .channel-image-missing {border-color:#526676;color:#dce6ed}
+
+/* Polls use the same chat bubble and never force a viewport-wide min width. */
+.channel-conversation .channel-message-poll {
+  width:min(480px,92%);
+  max-width:92%;
+}
+.channel-conversation .channel-poll,
+.channel-conversation .channel-poll-options,
+.channel-conversation .channel-poll-title,
+.channel-conversation .channel-poll-choice {min-width:0;max-width:100%;box-sizing:border-box}
+.channel-conversation .channel-poll-title {color:#f5f8fb;overflow-wrap:anywhere}
+.channel-conversation .channel-poll-title svg {color:#77c2e9}
+.channel-conversation .channel-poll-choice {
+  width:100%;
+  min-width:0;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.22);
+  color:#f5f8fb;
+  overflow:hidden;
+}
+.channel-conversation .channel-poll-choice.chosen {border-color:#78c8eb;background:rgba(120,200,235,.18)}
+.channel-conversation .channel-poll-option-name {flex:1;white-space:normal;overflow-wrap:anywhere}
+.channel-conversation .channel-poll-option-name svg {color:#8adaf5}
+.channel-conversation .channel-choice-circle {border-color:#c4d4dc}
+.channel-conversation .channel-poll-percent,
+.channel-conversation .channel-poll-footer {color:#bfccd6}
+.channel-conversation .channel-poll-meter {background:rgba(115,200,238,.22)}
+.channel-conversation .channel-poll .form-error {color:#ffd1ce}
+
+@media (max-width:700px) {
+  .channel-conversation .channel-feed {padding:12px 13px;gap:10px}
+  .channel-conversation .channel-message {
+    width:max-content;
+    max-width:calc(100% - 12px);
+    min-width:0;
+  }
+  .channel-conversation .channel-message-poll {
+    width:calc(100% - 12px);
+    max-width:calc(100% - 12px);
+  }
+  .channel-conversation .channel-message-main {padding:11px 13px 8px}
+  .channel-conversation .channel-message p {font-size:14px}
+  .channel-chat-composer {padding:14px;max-width:100%}
+  .channel-poll-edit-row {gap:6px}
+  .channel-poll-edit-row > span {flex-basis:18px}
+  .channel-chat-composer .channel-poll-submit {width:100%}
+}

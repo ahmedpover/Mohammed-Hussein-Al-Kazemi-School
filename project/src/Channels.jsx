@@ -5,6 +5,12 @@ import './channels.css';
 
 const subjectName = id => ({ fiqh: 'الفقه', usul: 'أصول الفقه', aqida: 'العقائد' })[id] || id || 'مادة غير محددة';
 const today = () => new Intl.DateTimeFormat('ar-IQ', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date());
+const messageTime = post => {
+  const stamp = post?.createdAt;
+  if (!stamp) return post?.date || '';
+  const parsed = new Date(stamp);
+  return Number.isNaN(parsed.getTime()) ? (post?.date || '') : new Intl.DateTimeFormat('ar-IQ', { hour: 'numeric', minute: '2-digit', hour12: true }).format(parsed);
+};
 
 export default function Channels({ role, userId, channelTeachers = [], channels, lectures = [], joined, allowedSubjects, onCreate, onJoin, onLeave, onPost, onPoll, onVote, onDeletePost, onDeleteChannel, onOpenLecture }) {
   const [activeId, setActiveId] = useMotionState(null);
@@ -82,13 +88,14 @@ function CreateChannel({ channels, allowedSubjects, isAdmin, teachers = [], onCl
 }
 
 function ChatPost({post,teacherName,canDelete,onDelete,onVote}) {
-  return <article className="channel-message" dir="rtl">
+  return <article className={`channel-message ${post.poll ? 'channel-message-poll' : 'channel-message-text'}`} dir="rtl">
     <div className="channel-message-main">
-      <div className="channel-message-meta"><strong>{teacherName}</strong><span>{post.date}</span>{canDelete && <button type="button" className="channel-delete" aria-label="حذف الرسالة" title="حذف" onClick={onDelete}><Trash2 size={16}/></button>}</div>
+      <div className="channel-message-meta"><strong>{teacherName}</strong>{canDelete && <button type="button" className="channel-delete" aria-label="حذف الرسالة" title="حذف" onClick={onDelete}><Trash2 size={16}/></button>}</div>
       {post.text && <p>{post.text}</p>}
       {post.imageUrl && <img src={post.imageUrl} alt={post.text ? `صورة مع الرسالة: ${post.text.slice(0,70)}` : 'صورة منشورة في القناة'} loading="lazy" />}
       {post.imageName && !post.imageUrl && <div className="channel-image-missing">الصورة غير متاحة حالياً.</div>}
       {post.poll && <PollCard poll={post.poll} onVote={onVote} />}
+      <div className="channel-message-footer"><time dateTime={post.createdAt || undefined} title={post.date || undefined}>{messageTime(post)}</time></div>
     </div>
   </article>;
 }
