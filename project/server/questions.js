@@ -74,6 +74,7 @@ const QUESTION_SQL = `SELECT q.id,q.topic,q.title,q.body,q.audience,q.student_id
 export function createQuestionsRouter({query,id,requireUser,fail,pushStudent}) {
   const router=Router();
   router.use(requireUser);
+  router.use((req,res,next)=>{if(req.actor.role==='representative')return next(fail(403,'هذا القسم غير متاح لحساب ممثل الشعبة.'));next();});
   const upload=multer({storage:multer.memoryStorage(),limits:{files:2,fileSize:MAX_AUDIO,fields:4,fieldSize:9000}});
   async function getQuestion(questionId) {
     if (!isUUID(questionId)) throw fail(404,'السؤال غير موجود.');

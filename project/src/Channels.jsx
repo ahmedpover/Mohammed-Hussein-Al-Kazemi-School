@@ -20,6 +20,7 @@ export default function Channels({ role, userId, channelTeachers = [], channels,
   const active = channels.find(channel => channel.id === activeId);
   const activeLectures = lectures.filter(lecture => lecture.channelId === activeId);
   const isTeacher = role === 'teacher';
+  const isRep = role === 'representative';
   const isAdmin = role === 'admin';
   const found = lookedUp ? channels.find(channel => channel.handle === lookedUp) : null;
   const mine = isAdmin ? channels : isTeacher ? channels.filter(channel => !channel.ownerId || channel.ownerId === userId) : channels.filter(channel => joined.includes(channel.id));
@@ -41,15 +42,15 @@ export default function Channels({ role, userId, channelTeachers = [], channels,
         </section>
         <section className="channel-conversation" aria-label="رسائل القناة">
           <div className="channel-posts-head"><h3><MessageSquare size={20}/> رسائل القناة</h3><span>{active.posts?.length || 0} رسالة واستفتاء</span></div>
-          {(active.posts || []).length ? <div className="channel-feed">{active.posts.map(post => <ChatPost key={post.id} post={post} teacherName={active.teacherName || 'أستاذ المادة'} canDelete={isAdmin || (isTeacher && active.ownerId === userId)} onDelete={() => onDeletePost(active.id, post.id)} onVote={choice => onVote?.(post.id,choice)} />)}</div> : <div className="channel-empty"><MessageSquare size={25} /><p>لا توجد رسائل أو استفتاءات بعد.</p></div>}
+          {(active.posts || []).length ? <div className="channel-feed">{active.posts.map(post => <ChatPost key={post.id} post={post} teacherName={post.authorName || active.teacherName || 'أستاذ المادة'} canDelete={isAdmin || (isTeacher && active.ownerId === userId) || (isRep && joined.includes(active.id))} onDelete={() => onDeletePost(active.id, post.id)} onVote={choice => onVote?.(post.id,choice)} />)}</div> : <div className="channel-empty"><MessageSquare size={25} /><p>لا توجد رسائل أو استفتاءات بعد.</p></div>}
         </section>
-        {(isAdmin || (isTeacher && active.ownerId === userId)) && <PostComposer key={active.id} channel={active} onPost={onPost} onPoll={onPoll} />}
+        {(isAdmin || (isTeacher && active.ownerId === userId) || (isRep && joined.includes(active.id))) && <PostComposer key={active.id} channel={active} onPost={onPost} onPoll={onPoll} />}
       </>}
     </> : <>
       {!isTeacher && !isAdmin && <form className="channel-search" onSubmit={event => { event.preventDefault(); setLookedUp(search.trim().replace(/^@/, '').toLowerCase()); }}><label htmlFor="channel-handle-search">البحث بمعرّف القناة</label><div><Hash size={19} /><input id="channel-handle-search" dir="ltr" value={search} onChange={event => { setSearch(event.target.value); setLookedUp(''); }} placeholder="مثال: fiqh_stage1" autoComplete="off" /><button className="primary-button" type="submit"><Search size={17} /> بحث</button></div></form>}
       {!isTeacher && lookedUp && <div className="channel-results"><h3>نتيجة البحث</h3>{found ? <ChannelCard channel={found} joined={joined.includes(found.id)} onOpen={() => setActiveId(found.id)} onJoin={() => onJoin(found.id)} /> : <div className="channel-empty"><Search size={24} /><p>لا توجد قناة بهذا المعرّف. تأكد من كتابته كما أعطاك الأستاذ.</p></div>}</div>}
       <div className="channel-list-head"><h3>{isAdmin ? 'جميع القنوات' : isTeacher ? 'قنوات المواد' : 'قنواتي'}</h3><span>{mine.length} قنوات</span></div>
-      {mine.length ? <div className="channel-grid">{mine.map(channel => <ChannelCard key={channel.id} channel={channel} joined={joined.includes(channel.id)} teacher={isTeacher || isAdmin} onOpen={() => setActiveId(channel.id)} />)}</div> : <div className="channel-empty"><Users size={27} /><p>{isAdmin ? 'لا توجد قنوات بعد.' : isTeacher ? 'لم تنشئ قناة بعد. ابدأ بقناة لمادة تدرّسها.' : 'لم تنضم إلى أي قناة بعد. ابحث عن معرّف قناة المادة.'}</p></div>}
+      {mine.length ? <div className="channel-grid">{mine.map(channel => <ChannelCard key={channel.id} channel={channel} joined={joined.includes(channel.id)} teacher={isTeacher || isAdmin || isRep} onOpen={() => setActiveId(channel.id)} />)}</div> : <div className="channel-empty"><Users size={27} /><p>{isAdmin ? 'لا توجد قنوات بعد.' : isTeacher ? 'لم تنشئ قناة بعد. ابدأ بقناة لمادة تدرّسها.' : 'لم تنضم إلى أي قناة بعد. ابحث عن معرّف قناة المادة.'}</p></div>}
     </>}
     {createOpen && <CreateChannel channels={channels} isAdmin={isAdmin} teachers={channelTeachers} allowedSubjects={allowedSubjects} onClose={() => setCreateOpen(false)} onCreate={async channel => { const id = await onCreate(channel); setCreateOpen(false); setActiveId(id || channel.id); }} />}
   </div>;

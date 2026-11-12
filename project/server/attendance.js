@@ -5,6 +5,8 @@ import { monthRange, validDate, validMonth, validUUID, validateLessonInput, veri
 const fail=(status,message)=>Object.assign(new Error(message),{status});
 const wrap=fn=>async(req,res,next)=>{try{await fn(req,res,next);}catch(error){next(error);}};
 const admin=req=>{if(req.actor.role!=='admin')throw fail(403,'صلاحية الحضور والغياب مخصصة للإدارة.');};
+const attendanceRecorder=req=>{if(!['admin','representative'].includes(req.actor.role))throw fail(403,'تسجيل الغياب مخصص للإدارة والممثلين.');};
+const groupAccess=(req,groupId)=>{attendanceRecorder(req);if(req.actor.role==='representative'&&req.actor.groupId!==groupId)throw fail(403,'ليست لديك صلاحية تسجيل غياب شعبة أخرى.');};
 const student=req=>{if(req.actor.role!=='student')throw fail(403,'سجل الطالب لصاحب الحساب فقط.');};
 
 export async function initAttendanceTables(query){
@@ -123,19 +125,19 @@ export function createAttendanceRouter({query,pool,id}){
    res.json({ok:true});
  }));
  router.get('/groups',wrap(async(req,res)=>{
-   admin(req);
-   const {rows}=await query(`SELECT g.id,g.name,COUNT(gm.student_id)::int AS "studentCount" FROM student_groups g LEFT JOIN student_group_members gm ON gm.group_id=g.id GROUP BY g.id ORDER BY g.name`);
+   attendanceRecorder(req);
+   const {rows}=await query(`SELECT g.id,g.name,COUNT(gm.student_id)::int AS "studentCount" FROM student_groups g LEFT JOIN student_group_members gm ON gm.group_id=g.id WHERE ($1::uuid IS NULL OR g.id=$1::uuid) GROUP BY g.id ORDER BY g.name`,[req.actor.role==='representative'?req.actor.groupId:null]);
    res.json(rows);
  }));
  router.get('/groups/:groupId/roster',wrap(async(req,res)=>{
-   admin(req);
+   groupAccess(req,req.params.groupId);
    const {rows:groups}=await query('SELECT id,name FROM student_groups WHERE id=$1',[req.params.groupId]);
    if(!groups.length)throw fail(404,'الشعبة غير موجودة.');
    const {rows}=await query(`SELECT u.id,u.name FROM student_group_members gm JOIN users u ON u.id=gm.student_id WHERE gm.group_id=$1 AND u.role='student' ORDER BY u.name,u.id`,[req.params.groupId]);
    res.json({group:groups[0],students:rows});
  }));
  router.get('/lessons',wrap(async(req,res)=>{
-   admin(req);
+   groupAccess(req,req.query.groupId);
    const groupId=req.query.groupId;
    const date=req.query.date;
    if(!validUUID(groupId) || !validDate(date))throw fail(400,'اختر شعبة وتاريخاً صحيحين.');
@@ -143,15 +145,17 @@ export function createAttendanceRouter({query,pool,id}){
    res.json(rows);
  }));
  router.get('/lessons/:lessonId',wrap(async(req,res)=>{
-   admin(req);
+   attendanceRecorder(req);
+   if(req.actor.role==='representative'){const {rows}=await query('SELECT group_id FROM attendance_lessons WHERE id=$1',[req.params.lessonId]);if(!rows.length)throw fail(404,'السجل غير موجود.');groupAccess(req,rows[0].group_id);}
    const {rows}=await query(`SELECT ${lessonFields()} FROM attendance_lessons l WHERE l.id=$1`,[req.params.lessonId]);
    if(!rows.length)throw fail(404,'السجل غير موجود.');
    const {rows:students}=await query(`SELECT e.student_id AS id,COALESCE(u.name,e.student_name) AS name,e.status FROM attendance_entries e LEFT JOIN users u ON u.id=e.student_id WHERE e.lesson_id=$1 ORDER BY name,e.student_id`,[req.params.lessonId]);
    res.json({lesson:rows[0],students});
  }));
  router.post('/lessons',wrap(async(req,res)=>{
-   admin(req);
+   attendanceRecorder(req);
    const input=validateLessonInput(req.body);
+   groupAccess(req,input.groupId);
    const client=await pool.connect();
    try {
      await client.query('BEGIN');
@@ -161,8 +165,10 @@ export function createAttendanceRouter({query,pool,id}){
      let lessonPeriod=1;
      let roster;
      if(lessonId){
-       const {rows:currentRows}=await client.query('SELECT id,period FROM attendance_lessons WHERE id=$1 FOR UPDATE',[lessonId]);
+       const {rows:currentRows}=await client.query('SELECT id,period,group_id,finalized FROM attendance_lessons WHERE id=$1 FOR UPDATE',[lessonId]);
        if(!currentRows.length)throw fail(409,'السجل الذي تحاول تعديله لم يعد موجوداً؛ أعد تحميل القائمة.');
+       if(req.actor.role==='representative'&&currentRows[0].finalized)throw fail(403,'تصحيح السجل المعتمد من صلاحية الإدارة فقط.');
+       if(req.actor.role==='representative'){const {rows:linked}=await client.query('SELECT group_id FROM attendance_lessons WHERE id=$1',[lessonId]);if(linked[0]?.group_id!==input.groupId)throw fail(403,'السجل تابع لشعبة أخرى.');}
        lessonPeriod=currentRows[0].period || 1;
        const {rows:dup}=await client.query(`SELECT id FROM attendance_lessons WHERE group_id=$1 AND lesson_date=$2::date AND LOWER(BTRIM(subject))=LOWER(BTRIM($3)) AND id<>$4 FOR UPDATE`,[input.groupId,input.lessonDate,input.subject,lessonId]);
        if(dup.length)throw fail(409,'هذه المادة مسجلة مسبقاً في هذا اليوم. افتح سجلها من قائمة مواد اليوم لتعديله.');

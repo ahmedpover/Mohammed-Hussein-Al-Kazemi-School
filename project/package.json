@@ -1,7 +1,7 @@
 {
   "name": "madrasat-al-kazimi",
   "private": true,
-  "version": "0.10.23",
+  "version": "0.10.24",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

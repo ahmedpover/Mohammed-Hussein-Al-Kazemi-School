@@ -47,3 +47,10 @@
  .cloud-app .desktop-sidebar .sidebar-bottom { flex-shrink: 0; }
  .cloud-app .desktop-sidebar .sidebar-bottom { padding-top: 18px; padding-bottom: 12px; }
 }
+
+/* Representative management shares the teacher invite design. */
+.cloud-admin form.cloud-invite-form{display:grid;gap:15px;margin-top:18px;padding:20px;border:1px solid var(--line);border-radius:14px;min-width:0}
+.cloud-admin form.cloud-invite-form select{width:100%;min-width:0;border:1px solid var(--line);border-radius:6px;background:var(--surface-soft);color:var(--ink);padding:11px;outline-color:var(--gold)}
+.cloud-admin form.cloud-invite-form label{min-width:0}
+.cloud-admin form.cloud-invite-form input{min-width:0}
+@media(max-width:600px){.cloud-admin form.cloud-invite-form{padding:12px}.cloud-admin form.cloud-invite-form .modal-actions{flex-wrap:wrap}}
