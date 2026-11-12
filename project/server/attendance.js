@@ -32,6 +32,20 @@ export async function initAttendanceTables(query){
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(lesson_id,student_id)
   );
+  ALTER TABLE attendance_entries ADD COLUMN IF NOT EXISTS excused boolean NOT NULL DEFAULT false;
+  ALTER TABLE attendance_entries ADD COLUMN IF NOT EXISTS excused_by uuid REFERENCES users(id) ON DELETE SET NULL;
+  ALTER TABLE attendance_entries ADD COLUMN IF NOT EXISTS excused_at timestamptz;
+  CREATE TABLE IF NOT EXISTS attendance_hijri_months(
+    hijri_year integer NOT NULL CHECK(hijri_year BETWEEN 1300 AND 1600),
+    hijri_month integer NOT NULL CHECK(hijri_month BETWEEN 1 AND 12),
+    start_date date NOT NULL,
+    end_date date NOT NULL,
+    source_url text,
+    updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY(hijri_year,hijri_month),
+    CONSTRAINT hijri_month_duration CHECK(end_date-start_date IN (28,29))
+  );
   CREATE INDEX IF NOT EXISTS attendance_entries_student_idx ON attendance_entries(student_id);
   CREATE TABLE IF NOT EXISTS attendance_audit(
     id uuid PRIMARY KEY,
@@ -47,12 +61,44 @@ export async function initAttendanceTables(query){
 function safeMonth(queryMonth){return monthRange(queryMonth);}
 function lessonFields(){return `l.id,l.group_id AS "groupId",l.group_name AS "groupName",l.lesson_date::text AS "lessonDate",l.period,l.subject,l.finalized,l.created_at AS "createdAt",l.updated_at AS "updatedAt"`;}
 
-const countsSql = `COUNT(*) FILTER(WHERE e.status='absent')::int AS absences,
+const countsSql = `COUNT(*) FILTER(WHERE e.status='absent' AND NOT e.excused)::int AS absences,
   COUNT(*) FILTER(WHERE e.status='late')::int AS delays,
-  COUNT(*) FILTER(WHERE e.status='present')::int AS presents`;
+  COUNT(*) FILTER(WHERE e.status='present')::int AS presents, COUNT(*) FILTER(WHERE e.status='absent' AND e.excused)::int AS excused`;
 
 export function createAttendanceRouter({query,pool,id}){
  const router=express.Router();
+ router.get('/hijri-months',wrap(async(req,res)=>{
+   admin(req);
+   const {rows}=await query('SELECT hijri_year AS year,hijri_month AS month,start_date::text AS "startDate",end_date::text AS "endDate",source_url AS "sourceUrl" FROM attendance_hijri_months ORDER BY start_date DESC LIMIT 36');
+   res.json(rows);
+ }));
+ router.put('/hijri-months',wrap(async(req,res)=>{
+   admin(req);
+   const {year,month,startDate,endDate,sourceUrl=''}=req.body||{};
+   const y=Number(year),m=Number(month);
+   if(!Number.isInteger(y)||y<1300||y>1600||!Number.isInteger(m)||m<1||m>12||!validDate(startDate)||!validDate(endDate))throw fail(400,'تأكد من السنة والشهر والتواريخ.');
+   const days=Math.round((Date.parse(endDate+'T00:00:00Z')-Date.parse(startDate+'T00:00:00Z'))/86400000)+1;
+   if(days!==29&&days!==30)throw fail(400,'الشهر الهجري يجب أن يكون 29 أو 30 يوماً.');
+   const url=String(sourceUrl||'').trim();
+   if(url.length>500)throw fail(400,'رابط المصدر طويل جداً.');
+   const client=await pool.connect();
+   try{
+     await client.query('BEGIN');
+     const {rows:conflicts}=await client.query(`SELECT 1 FROM attendance_hijri_months WHERE NOT (hijri_year=$1 AND hijri_month=$2) AND start_date<=$4::date AND end_date>=$3::date LIMIT 1`,[y,m,startDate,endDate]);
+     if(conflicts.length)throw fail(409,'هذه الأيام تتداخل مع شهر هجري مسجل. عدّل الشهر السابق أولاً.');
+     await client.query(`INSERT INTO attendance_hijri_months(hijri_year,hijri_month,start_date,end_date,source_url,updated_by) VALUES($1,$2,$3::date,$4::date,$5,$6) ON CONFLICT(hijri_year,hijri_month) DO UPDATE SET start_date=EXCLUDED.start_date,end_date=EXCLUDED.end_date,source_url=EXCLUDED.source_url,updated_by=EXCLUDED.updated_by,updated_at=now()`,[y,m,startDate,endDate,url,req.actor.id]);
+     await client.query('COMMIT');res.json({ok:true});
+   }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+ }));
+ router.patch('/students/:studentId/lessons/:lessonId/excuse',wrap(async(req,res)=>{
+   admin(req);
+   const {studentId,lessonId}=req.params;
+   if(!validUUID(studentId)||!validUUID(lessonId)||typeof req.body?.excused!=='boolean')throw fail(400,'طلب غير صحيح.');
+   const {rows}=await query(`UPDATE attendance_entries e SET excused=$3,excused_by=$4,excused_at=CASE WHEN $3 THEN now() ELSE NULL END,updated_at=now()
+     FROM attendance_lessons l WHERE e.lesson_id=l.id AND e.student_id=$1 AND e.lesson_id=$2 AND e.status='absent' AND l.finalized=true RETURNING e.student_id`,[studentId,lessonId,req.body.excused,req.actor.id]);
+   if(!rows.length)throw fail(404,'الغياب غير موجود أو غير معتمد.');
+   res.json({ok:true});
+ }));
  router.get('/groups',wrap(async(req,res)=>{
    admin(req);
    const {rows}=await query(`SELECT g.id,g.name,COUNT(gm.student_id)::int AS "studentCount" FROM student_groups g LEFT JOIN student_group_members gm ON gm.group_id=g.id GROUP BY g.id ORDER BY g.name`);
@@ -70,7 +116,7 @@ export function createAttendanceRouter({query,pool,id}){
    const groupId=req.query.groupId;
    const date=req.query.date;
    if(!validUUID(groupId) || !validDate(date))throw fail(400,'اختر شعبة وتاريخاً صحيحين.');
-   const {rows}=await query(`SELECT ${lessonFields()},COUNT(e.student_id)::int AS "studentCount",COUNT(*) FILTER(WHERE e.status='absent')::int AS absences,COUNT(*) FILTER(WHERE e.status='late')::int AS delays FROM attendance_lessons l LEFT JOIN attendance_entries e ON e.lesson_id=l.id WHERE l.group_id=$1 AND l.lesson_date=$2::date GROUP BY l.id ORDER BY l.period,l.subject`,[groupId,date]);
+   const {rows}=await query(`SELECT ${lessonFields()},COUNT(e.student_id)::int AS "studentCount",COUNT(*) FILTER(WHERE e.status='absent' AND NOT e.excused)::int AS absences,COUNT(*) FILTER(WHERE e.status='late')::int AS delays FROM attendance_lessons l LEFT JOIN attendance_entries e ON e.lesson_id=l.id WHERE l.group_id=$1 AND l.lesson_date=$2::date GROUP BY l.id ORDER BY l.period,l.subject`,[groupId,date]);
    res.json(rows);
  }));
  router.get('/lessons/:lessonId',wrap(async(req,res)=>{
@@ -119,7 +165,7 @@ export function createAttendanceRouter({query,pool,id}){
      for(const entry of input.entries){
        const prior=previous.get(entry.studentId)||null;
        if(prior===entry.status)continue;
-       await client.query(`INSERT INTO attendance_entries(lesson_id,student_id,student_name,status,updated_by) VALUES($1,$2,$3,$4,$5) ON CONFLICT(lesson_id,student_id) DO UPDATE SET status=EXCLUDED.status,updated_by=EXCLUDED.updated_by,updated_at=now()`,[lessonId,entry.studentId,names.get(entry.studentId),entry.status,req.actor.id]);
+       await client.query(`INSERT INTO attendance_entries(lesson_id,student_id,student_name,status,updated_by) VALUES($1,$2,$3,$4,$5) ON CONFLICT(lesson_id,student_id) DO UPDATE SET status=EXCLUDED.status,excused=CASE WHEN attendance_entries.status=EXCLUDED.status THEN attendance_entries.excused ELSE false END,updated_by=EXCLUDED.updated_by,updated_at=now()`,[lessonId,entry.studentId,names.get(entry.studentId),entry.status,req.actor.id]);
        await client.query(`INSERT INTO attendance_audit(id,lesson_id,student_id,old_status,new_status,changed_by) VALUES($1,$2,$3,$4,$5,$6)`,[id(),lessonId,entry.studentId,prior,entry.status,req.actor.id]);
      }
      await client.query('COMMIT');
@@ -128,47 +174,54 @@ export function createAttendanceRouter({query,pool,id}){
  }));
  router.get('/report',wrap(async(req,res)=>{
    admin(req);
-   const first=safeMonth(req.query.month);
+   let first,last;
+   if(req.query.hijriYear && req.query.hijriMonth){
+     const y=Number(req.query.hijriYear),m=Number(req.query.hijriMonth);
+     if(!Number.isInteger(y)||!Number.isInteger(m)||m<1||m>12)throw fail(400,'الشهر الهجري غير صحيح.');
+     const {rows:dates}=await query('SELECT start_date::text AS start,end_date::text AS finish FROM attendance_hijri_months WHERE hijri_year=$1 AND hijri_month=$2',[y,m]);
+     if(!dates.length)throw fail(400,'اعتمد بداية ونهاية الشهر الهجري أولاً.');
+     first=dates[0].start;last=dates[0].finish;
+   }else{first=safeMonth(req.query.month);const d=new Date(first+'T00:00:00Z');d.setUTCMonth(d.getUTCMonth()+1);d.setUTCDate(d.getUTCDate()-1);last=d.toISOString().slice(0,10);}
    const groupId=req.query.groupId||null;
    if(groupId && !validUUID(groupId))throw fail(400,'الشعبة غير صحيحة.');
    const {rows}=await query(`WITH pupils AS (
      SELECT group_id,student_id FROM student_group_members
      UNION
      SELECT l.group_id,e.student_id FROM attendance_lessons l JOIN attendance_entries e ON e.lesson_id=l.id
-       WHERE l.finalized=true AND l.lesson_date >= $1::date AND l.lesson_date < ($1::date + interval '1 month') AND l.group_id IS NOT NULL
+       WHERE l.finalized=true AND l.lesson_date >= $1::date AND l.lesson_date <= $3::date AND l.group_id IS NOT NULL
    ), stats AS (
      SELECT l.group_id,e.student_id,
-     COUNT(*) FILTER(WHERE e.status='absent')::int AS absences,
+     COUNT(*) FILTER(WHERE e.status='absent' AND NOT e.excused)::int AS absences,
      COUNT(*) FILTER(WHERE e.status='late')::int AS delays,
-     COUNT(*) FILTER(WHERE e.status='present')::int AS presents
+     COUNT(*) FILTER(WHERE e.status='present')::int AS presents, COUNT(*) FILTER(WHERE e.status='absent' AND e.excused)::int AS excused
      FROM attendance_entries e JOIN attendance_lessons l ON l.id=e.lesson_id
-     WHERE l.finalized=true AND l.lesson_date >= $1::date AND l.lesson_date < ($1::date + interval '1 month')
+     WHERE l.finalized=true AND l.lesson_date >= $1::date AND l.lesson_date <= $3::date
      GROUP BY l.group_id,e.student_id
    )
    SELECT g.id AS "groupId",g.name AS "groupName",u.id AS "studentId",u.name AS "studentName",
-     COALESCE(s.absences,0)::int AS absences,COALESCE(s.delays,0)::int AS delays,COALESCE(s.presents,0)::int AS presents
+     COALESCE(s.absences,0)::int AS absences,COALESCE(s.delays,0)::int AS delays,COALESCE(s.presents,0)::int AS presents,COALESCE(s.excused,0)::int AS excused
    FROM student_groups g LEFT JOIN pupils p ON p.group_id=g.id
    LEFT JOIN users u ON u.id=p.student_id AND u.role='student'
    LEFT JOIN stats s ON s.group_id=g.id AND s.student_id=u.id
    WHERE ($2::uuid IS NULL OR g.id=$2::uuid)
-   ORDER BY g.name,u.name,u.id`,[first,groupId]);
+   ORDER BY g.name,u.name,u.id`,[first,groupId,last]);
    const groups=[];
    for(const row of rows){
      let group=groups.find(item=>item.id===row.groupId);
      if(!group){group={id:row.groupId,name:row.groupName,students:[]};groups.push(group);}
-     if(row.studentId)group.students.push({id:row.studentId,name:row.studentName,absences:row.absences,delays:row.delays,presents:row.presents});
+     if(row.studentId)group.students.push({id:row.studentId,name:row.studentName,absences:row.absences,delays:row.delays,presents:row.presents,excused:row.excused});
    }
-   res.json({month:req.query.month,groups});
+   res.json({month:req.query.hijriYear?`${req.query.hijriYear}-${String(req.query.hijriMonth).padStart(2,'0')}-H`:req.query.month,groups});
  }));
  router.get('/students',wrap(async(req,res)=>{
    admin(req);
-   const {rows}=await query(`SELECT u.id,u.name,u.email,COUNT(*) FILTER(WHERE l.finalized AND e.status='absent')::int AS absences,COUNT(*) FILTER(WHERE l.finalized AND e.status='late')::int AS delays
+   const {rows}=await query(`SELECT u.id,u.name,u.email,COUNT(*) FILTER(WHERE l.finalized AND e.status='absent' AND NOT e.excused)::int AS absences,COUNT(*) FILTER(WHERE l.finalized AND e.status='late')::int AS delays
      FROM users u LEFT JOIN attendance_entries e ON e.student_id=u.id LEFT JOIN attendance_lessons l ON l.id=e.lesson_id WHERE u.role='student' GROUP BY u.id ORDER BY u.name`);
    res.json(rows);
  }));
  async function studentHistory(studentId){
    const {rows:totals}=await query(`SELECT ${countsSql} FROM attendance_entries e JOIN attendance_lessons l ON l.id=e.lesson_id WHERE e.student_id=$1 AND l.finalized=true`,[studentId]);
-   const {rows:items}=await query(`SELECT l.id AS "lessonId",l.group_name AS "groupName",l.lesson_date::text AS "lessonDate",l.subject,l.period,e.status
+   const {rows:items}=await query(`SELECT l.id AS "lessonId",l.group_name AS "groupName",l.lesson_date::text AS "lessonDate",l.subject,l.period,e.status,e.excused
      FROM attendance_entries e JOIN attendance_lessons l ON l.id=e.lesson_id
      WHERE e.student_id=$1 AND l.finalized=true AND e.status IN ('absent','late') ORDER BY l.lesson_date DESC,l.period DESC LIMIT 1000`,[studentId]);
    return {totals:totals[0]||{absences:0,delays:0,presents:0},items};
