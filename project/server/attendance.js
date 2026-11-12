@@ -7,7 +7,7 @@ const wrap=fn=>async(req,res,next)=>{try{await fn(req,res,next);}catch(error){ne
 const admin=req=>{if(req.actor.role!=='admin')throw fail(403,'صلاحية الحضور والغياب مخصصة للإدارة.');};
 const attendanceRecorder=req=>{if(!['admin','representative'].includes(req.actor.role))throw fail(403,'تسجيل الغياب مخصص للإدارة والممثلين.');};
 const groupAccess=(req,groupId)=>{attendanceRecorder(req);if(req.actor.role==='representative'&&req.actor.groupId!==groupId)throw fail(403,'ليست لديك صلاحية تسجيل غياب شعبة أخرى.');};
-const student=req=>{if(req.actor.role!=='student')throw fail(403,'سجل الطالب لصاحب الحساب فقط.');};
+const student=req=>{if(!['student','representative'].includes(req.actor.role))throw fail(403,'سجل الطالب لصاحب الحساب فقط.');};
 
 export async function initAttendanceTables(query){
   await query(`CREATE TABLE IF NOT EXISTS attendance_lessons(
@@ -133,7 +133,7 @@ export function createAttendanceRouter({query,pool,id}){
    groupAccess(req,req.params.groupId);
    const {rows:groups}=await query('SELECT id,name FROM student_groups WHERE id=$1',[req.params.groupId]);
    if(!groups.length)throw fail(404,'الشعبة غير موجودة.');
-   const {rows}=await query(`SELECT u.id,u.name FROM student_group_members gm JOIN users u ON u.id=gm.student_id WHERE gm.group_id=$1 AND u.role='student' ORDER BY u.name,u.id`,[req.params.groupId]);
+   const {rows}=await query(`SELECT u.id,u.name FROM student_group_members gm JOIN users u ON u.id=gm.student_id WHERE gm.group_id=$1 AND u.role IN ('student','representative') ORDER BY u.name,u.id`,[req.params.groupId]);
    res.json({group:groups[0],students:rows});
  }));
  router.get('/lessons',wrap(async(req,res)=>{
@@ -180,7 +180,7 @@ export function createAttendanceRouter({query,pool,id}){
        if(duplicate)throw fail(409,'هذه المادة مسجلة مسبقاً في هذا اليوم. افتح سجلها من قائمة مواد اليوم لتعديله.');
        lessonPeriod=(sameDay.at(-1)?.period || 0) + 1;
        lessonId=id();
-       const {rows}=await client.query(`SELECT u.id,u.name FROM student_group_members gm JOIN users u ON u.id=gm.student_id WHERE gm.group_id=$1 AND u.role='student' ORDER BY u.name,u.id`,[input.groupId]);
+       const {rows}=await client.query(`SELECT u.id,u.name FROM student_group_members gm JOIN users u ON u.id=gm.student_id WHERE gm.group_id=$1 AND u.role IN ('student','representative') ORDER BY u.name,u.id`,[input.groupId]);
        roster=rows;
      }
      verifyRoster(roster.map(item=>item.id),input.entries);
@@ -229,7 +229,7 @@ export function createAttendanceRouter({query,pool,id}){
    SELECT g.id AS "groupId",g.name AS "groupName",u.id AS "studentId",u.name AS "studentName",
      COALESCE(s.absences,0)::int AS absences,COALESCE(s.delays,0)::int AS delays,COALESCE(s.presents,0)::int AS presents,COALESCE(s.excused,0)::int AS excused
    FROM student_groups g LEFT JOIN pupils p ON p.group_id=g.id
-   LEFT JOIN users u ON u.id=p.student_id AND u.role='student'
+   LEFT JOIN users u ON u.id=p.student_id AND u.role IN ('student','representative')
    LEFT JOIN stats s ON s.group_id=g.id AND s.student_id=u.id
    WHERE ($2::uuid IS NULL OR g.id=$2::uuid)
    ORDER BY g.name,u.name,u.id`,[first,groupId,last]);
@@ -244,7 +244,7 @@ export function createAttendanceRouter({query,pool,id}){
  router.get('/students',wrap(async(req,res)=>{
    admin(req);
    const {rows}=await query(`SELECT u.id,u.name,u.email,COUNT(*) FILTER(WHERE l.finalized AND e.status='absent' AND NOT e.excused)::int AS absences,COUNT(*) FILTER(WHERE l.finalized AND e.status='late')::int AS delays
-     FROM users u LEFT JOIN attendance_entries e ON e.student_id=u.id LEFT JOIN attendance_lessons l ON l.id=e.lesson_id WHERE u.role='student' GROUP BY u.id ORDER BY u.name`);
+     FROM users u LEFT JOIN attendance_entries e ON e.student_id=u.id LEFT JOIN attendance_lessons l ON l.id=e.lesson_id WHERE u.role IN ('student','representative') GROUP BY u.id ORDER BY u.name`);
    res.json(rows);
  }));
  async function studentHistory(studentId){
@@ -256,7 +256,7 @@ export function createAttendanceRouter({query,pool,id}){
  }
  router.get('/students/:studentId',wrap(async(req,res)=>{
    admin(req);
-   const {rows}=await query(`SELECT id,name FROM users WHERE id=$1 AND role='student'`,[req.params.studentId]);
+   const {rows}=await query(`SELECT id,name FROM users WHERE id=$1 AND role IN ('student','representative')`,[req.params.studentId]);
    if(!rows.length)throw fail(404,'الطالب غير موجود.');
    res.json({...rows[0],...await studentHistory(req.params.studentId)});
  }));
