@@ -1,4 +1,5 @@
 import express from 'express';
+import {forecastYear,ensureSchoolHijriYear,loadSchoolHijriYear,reflowMonths,daysBetween} from './hijri-calendar.js';
 import { monthRange, validDate, validMonth, validUUID, validateLessonInput, verifyRoster } from './attendance-policy.js';
 
 const fail=(status,message)=>Object.assign(new Error(message),{status});
@@ -46,6 +47,7 @@ export async function initAttendanceTables(query){
     PRIMARY KEY(hijri_year,hijri_month),
     CONSTRAINT hijri_month_duration CHECK(end_date-start_date IN (28,29))
   );
+  ALTER TABLE attendance_hijri_months ADD COLUMN IF NOT EXISTS confirmed boolean NOT NULL DEFAULT false;
   CREATE INDEX IF NOT EXISTS attendance_entries_student_idx ON attendance_entries(student_id);
   CREATE TABLE IF NOT EXISTS attendance_audit(
     id uuid PRIMARY KEY,
@@ -69,25 +71,46 @@ export function createAttendanceRouter({query,pool,id}){
  const router=express.Router();
  router.get('/hijri-months',wrap(async(req,res)=>{
    admin(req);
-   const {rows}=await query('SELECT hijri_year AS year,hijri_month AS month,start_date::text AS "startDate",end_date::text AS "endDate",source_url AS "sourceUrl" FROM attendance_hijri_months ORDER BY start_date DESC LIMIT 36');
-   res.json(rows);
+   const year=Number(req.query.year||new Intl.DateTimeFormat('en-u-ca-islamic-umalqura',{year:'numeric'}).format(new Date()));
+   if(!Number.isInteger(year)||year<1300||year>1600)throw fail(400,'السنة الهجرية غير صحيحة.');
+   res.json(await loadSchoolHijriYear(query,year));
+ }));
+ // The student's view uses the SAME global calendar, but cannot edit it.
+ router.get('/hijri-calendar',wrap(async(req,res)=>{
+   if(!req.actor?.id)throw fail(401,'يجب تسجيل الدخول.');
+   const year=Number(req.query.year);
+   if(!Number.isInteger(year)||year<1300||year>1600)throw fail(400,'السنة الهجرية غير صحيحة.');
+   res.json(await loadSchoolHijriYear(query,year));
  }));
  router.put('/hijri-months',wrap(async(req,res)=>{
    admin(req);
-   const {year,month,startDate,endDate,sourceUrl=''}=req.body||{};
-   const y=Number(year),m=Number(month);
-   if(!Number.isInteger(y)||y<1300||y>1600||!Number.isInteger(m)||m<1||m>12||!validDate(startDate)||!validDate(endDate))throw fail(400,'تأكد من السنة والشهر والتواريخ.');
-   const days=Math.round((Date.parse(endDate+'T00:00:00Z')-Date.parse(startDate+'T00:00:00Z'))/86400000)+1;
-   if(days!==29&&days!==30)throw fail(400,'الشهر الهجري يجب أن يكون 29 أو 30 يوماً.');
+   const {year,month,days,startDate,sourceUrl=''}=req.body||{};
+   const y=Number(year),m=Number(month),d=Number(days);
+   if(!Number.isInteger(y)||y<1300||y>1600||!Number.isInteger(m)||m<1||m>12||![29,30].includes(d))throw fail(400,'اختر السنة والشهر وعدد الأيام (29 أو 30).');
+   if(startDate!==undefined&&!validDate(startDate))throw fail(400,'تاريخ البداية غير صحيح.');
    const url=String(sourceUrl||'').trim();
    if(url.length>500)throw fail(400,'رابط المصدر طويل جداً.');
    const client=await pool.connect();
    try{
      await client.query('BEGIN');
-     const {rows:conflicts}=await client.query(`SELECT 1 FROM attendance_hijri_months WHERE NOT (hijri_year=$1 AND hijri_month=$2) AND start_date<=$4::date AND end_date>=$3::date LIMIT 1`,[y,m,startDate,endDate]);
-     if(conflicts.length)throw fail(409,'هذه الأيام تتداخل مع شهر هجري مسجل. عدّل الشهر السابق أولاً.');
-     await client.query(`INSERT INTO attendance_hijri_months(hijri_year,hijri_month,start_date,end_date,source_url,updated_by) VALUES($1,$2,$3::date,$4::date,$5,$6) ON CONFLICT(hijri_year,hijri_month) DO UPDATE SET start_date=EXCLUDED.start_date,end_date=EXCLUDED.end_date,source_url=EXCLUDED.source_url,updated_by=EXCLUDED.updated_by,updated_at=now()`,[y,m,startDate,endDate,url,req.actor.id]);
-     await client.query('COMMIT');res.json({ok:true});
+     await client.query('LOCK TABLE attendance_hijri_months IN EXCLUSIVE MODE');
+     await ensureSchoolHijriYear(client,y);
+     const {rows}=await client.query(`SELECT hijri_year AS year,hijri_month AS month,start_date::text AS "startDate",end_date::text AS "endDate",source_url AS "sourceUrl",confirmed FROM attendance_hijri_months ORDER BY start_date, hijri_year, hijri_month FOR UPDATE`);
+     const idx=rows.findIndex(r=>Number(r.year)===y&&Number(r.month)===m);
+     if(idx<0)throw fail(500,'تعذّر العثور على الشهر.');
+     const sequence=rows.map(r=>({...r,days:daysBetween(r.startDate,r.endDate)}));
+     const targetStart=startDate||sequence[idx].startDate;
+     let result;
+     try{result=reflowMonths(sequence,idx,d,targetStart);}catch(e){throw fail(400,e.message);}
+     result[idx].confirmed=true;
+     result[idx].sourceUrl=url;
+     const from=idx>0&&result[idx-1].endDate!==sequence[idx-1].endDate?idx-1:idx;
+     for(let i=from;i<result.length;i++){
+       const item=result[i];
+       await client.query(`UPDATE attendance_hijri_months SET start_date=$3::date,end_date=$4::date,source_url=$5,confirmed=$6,updated_by=$7,updated_at=now() WHERE hijri_year=$1 AND hijri_month=$2`,[item.year,item.month,item.startDate,item.endDate,item.sourceUrl,item.confirmed,req.actor.id]);
+     }
+     await client.query('COMMIT');
+     res.json({ok:true,year:y,month:m});
    }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
  }));
  router.patch('/students/:studentId/lessons/:lessonId/excuse',wrap(async(req,res)=>{
@@ -178,9 +201,8 @@ export function createAttendanceRouter({query,pool,id}){
    if(req.query.hijriYear && req.query.hijriMonth){
      const y=Number(req.query.hijriYear),m=Number(req.query.hijriMonth);
      if(!Number.isInteger(y)||!Number.isInteger(m)||m<1||m>12)throw fail(400,'الشهر الهجري غير صحيح.');
-     const {rows:dates}=await query('SELECT start_date::text AS start,end_date::text AS finish FROM attendance_hijri_months WHERE hijri_year=$1 AND hijri_month=$2',[y,m]);
-     if(!dates.length)throw fail(400,'اعتمد بداية ونهاية الشهر الهجري أولاً.');
-     first=dates[0].start;last=dates[0].finish;
+     const calendar=await loadSchoolHijriYear(query,y);
+     first=calendar[m-1].startDate;last=calendar[m-1].endDate;
    }else{first=safeMonth(req.query.month);const d=new Date(first+'T00:00:00Z');d.setUTCMonth(d.getUTCMonth()+1);d.setUTCDate(d.getUTCDate()-1);last=d.toISOString().slice(0,10);}
    const groupId=req.query.groupId||null;
    if(groupId && !validUUID(groupId))throw fail(400,'الشعبة غير صحيحة.');

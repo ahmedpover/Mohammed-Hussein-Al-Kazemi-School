@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const srcUrl=new URL('../attendance.js',import.meta.url), policyUrl=new URL('../attendance-policy.js',import.meta.url).href;
+import {addDays} from '../hijri-calendar.js';
+const srcUrl=new URL('../attendance.js',import.meta.url), policyUrl=new URL('../attendance-policy.js',import.meta.url).href,calendarUrl=new URL('../hijri-calendar.js',import.meta.url).href;
 const original=await readFile(srcUrl,'utf8');
-const instrumented=original.replace("import express from 'express';",`const express={Router:()=>({routes:{},get(path,fn){this.routes['GET '+path]=fn;},post(path,fn){this.routes['POST '+path]=fn;}})};`).replace("from './attendance-policy.js'",`from '${policyUrl}'`);
+const instrumented=original.replace("import express from 'express';",`const express={Router:()=>({routes:{},get(path,fn){this.routes['GET '+path]=fn;},post(path,fn){this.routes['POST '+path]=fn;},put(path,fn){this.routes['PUT '+path]=fn;},patch(path,fn){this.routes['PATCH '+path]=fn;}})};`).replace("from './attendance-policy.js'",`from '${policyUrl}'`).replace("from './hijri-calendar.js'",`from '${calendarUrl}'`);
 const {createAttendanceRouter}=await import(`data:text/javascript;base64,${Buffer.from(instrumented).toString('base64')}`);
 const gid='3f9eb26b-2cf8-4ee8-b9d8-08245bf9d2b7',uid='6ec3f98e-1029-4b7b-9c88-87b8b64ea444',other='6ec3f98e-1029-4b7b-9c88-87b8b64ea445',lid='9e5f937e-afd5-4828-ac65-507ce1a31cea';
 async function call(router,method,path,actor,body={},params={},query={}){
@@ -51,4 +52,57 @@ test('admin can save all students and audit state changes atomically',async()=>{
  assert.equal(sql.filter(x=>x.statement.includes('INSERT INTO attendance_entries')).length,2);
  assert.equal(sql.filter(x=>x.statement.includes('INSERT INTO attendance_audit')).length,2);
  assert.ok(sql.some(x=>x.statement==='COMMIT'));
+});
+
+test('calendar updates are admin-only, while students read the same global calendar',async()=>{
+ const query=async()=>({rows:[]});
+ const router=createAttendanceRouter({query,pool:{},id:()=>lid});
+ await assert.rejects(()=>call(router,'PUT','/hijri-months',{id:uid,role:'student'},{year:1448,month:9,days:29}),{status:403});
+ await assert.rejects(()=>call(router,'GET','/hijri-months',{id:uid,role:'student'}, {},{}, {year:'1448'}),{status:403});
+ const result=await call(router,'GET','/hijri-calendar',{id:uid,role:'student'}, {},{}, {year:'1448'});
+ assert.equal(result.status,200);
+ assert.equal(result.body.length,12);
+ assert.equal(result.body[8].month,9);
+ assert.ok(result.body.every(x=>[29,30].includes(x.days)));
+});
+
+test('admin month correction persists a single school-wide chronological calendar',async()=>{
+ const db=new Map();const statements=[];
+ const query=async(sql,args=[])=>{
+   statements.push(sql.trim().slice(0,64));
+   if(['BEGIN','COMMIT','ROLLBACK'].includes(sql)||sql.includes('LOCK TABLE'))return{rows:[]};
+   if(sql.includes('FROM attendance_hijri_months WHERE hijri_year=$1 ORDER BY hijri_month')){
+     const y=Number(args[0]);return{rows:[...db.values()].filter(m=>m.year===y).sort((a,b)=>a.month-b.month)};
+   }
+   if(sql.includes('WHERE hijri_year=$1 AND hijri_month=12')){
+     const last=db.get(`${args[0]}-12`);return{rows:last?[{finish:last.endDate}]:[]};
+   }
+   if(sql.includes('INSERT INTO attendance_hijri_months')){
+     const [year,month,startDate,endDate,sourceUrl,confirmed]=args;
+     const key=`${year}-${month}`;
+     if(!db.has(key))db.set(key,{year,month,startDate,endDate,sourceUrl,confirmed});
+     return{rows:[]};
+   }
+   if(sql.includes('SELECT hijri_year AS year,hijri_month AS month,start_date::text') && sql.includes('FOR UPDATE')){
+     return{rows:[...db.values()].sort((a,b)=>a.startDate.localeCompare(b.startDate))};
+   }
+   if(sql.includes('UPDATE attendance_hijri_months')){
+     const [year,month,startDate,endDate,sourceUrl,confirmed]=args;
+     db.set(`${year}-${month}`,{year,month,startDate,endDate,sourceUrl,confirmed});return{rows:[]};
+   }
+   throw new Error('Unexpected query: '+sql);
+ };
+ const pool={connect:async()=>({query,release(){}})};
+ const router=createAttendanceRouter({query,pool,id:()=>lid});
+ const before=await call(router,'GET','/hijri-months',{id:uid,role:'admin'},{},{},{year:'1448'});
+ assert.equal(before.body.length,12);
+ const original=before.body[3],days=original.days===30?29:30;
+ const result=await call(router,'PUT','/hijri-months',{id:uid,role:'admin'},{year:1448,month:4,days,startDate:original.startDate,sourceUrl:'https://www.sistani.org/'});
+ assert.equal(result.status,200);
+ assert.equal(db.size,12);
+ const months=[...db.values()].sort((a,b)=>a.month-b.month);
+ assert.equal(months[3].confirmed,true);
+ assert.equal(months[3].endDate,addDays(original.startDate,days-1));
+ for(let i=1;i<months.length;i++)assert.equal(months[i].startDate,addDays(months[i-1].endDate,1));
+ assert.ok(statements.includes('COMMIT'));
 });
