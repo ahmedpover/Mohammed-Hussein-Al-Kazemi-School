@@ -73,3 +73,53 @@ export async function ensureSchoolHijriYear(client,year){
     await client.query(`INSERT INTO attendance_hijri_months(hijri_year,hijri_month,start_date,end_date,source_url,confirmed) VALUES($1,$2,$3::date,$4::date,$5,$6) ON CONFLICT(hijri_year,hijri_month) DO NOTHING`,[m.year,m.month,m.startDate,m.endDate,m.sourceUrl,m.confirmed]);
   }
 }
+
+// One-time official homepage date correction for 1448 AH:
+// 2026-11-12 = 1 Jumada al-Akhira in Najaf (2026-11-13 = day 2).
+// A contiguous 29/30-day calendar requires absorbing the extra day in the
+// nearest earlier 29-day provisional month. Never overwrite manual corrections.
+export const JUMADA_1448_SOURCE = 'https://www.sistani.org/';
+export function correctJumada1448(months){
+  if(months.length!==12 || months.some((m,i)=>Number(m.year)!==1448 || Number(m.month)!==i+1))throw new Error('Invalid 1448 school calendar');
+  const target=months[5];
+  if(target.startDate==='2026-11-12')return null; // already corrected
+  if(target.startDate!=='2026-11-11')return null; // custom calendar, do not override
+  const index=months.slice(0,5).findLastIndex(m=>Number(m.days)===29);
+  if(index<0 || months.slice(index).some(m=>m.confirmed || m.sourceUrl))return null;
+  const revised=months.map(m=>({...m}));
+  revised[index].endDate=addDays(revised[index].endDate,1);
+  revised[index].days=30;
+  for(let i=index+1;i<revised.length;i++){
+    revised[i].startDate=addDays(revised[i].startDate,1);
+    revised[i].endDate=addDays(revised[i].endDate,1);
+  }
+  revised[5].confirmed=true;
+  revised[5].sourceUrl=JUMADA_1448_SOURCE;
+  if(revised[5].startDate!=='2026-11-12' || revised.some((m,i)=>m.days!==daysBetween(m.startDate,m.endDate)||![29,30].includes(m.days)||(i>0&&m.startDate!==addDays(revised[i-1].endDate,1))))throw new Error('Hijri correction consistency check failed');
+  return revised;
+}
+
+// Called on deployment; idempotent, and leaves any already-edited school calendar alone.
+export async function applyJumada1448Correction(pool){
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE attendance_hijri_months IN EXCLUSIVE MODE');
+    await ensureSchoolHijriYear(client,1448);
+    const {rows}=await client.query(`SELECT hijri_year AS year,hijri_month AS month,start_date::text AS "startDate",end_date::text AS "endDate",source_url AS "sourceUrl",confirmed FROM attendance_hijri_months WHERE hijri_year=1448 ORDER BY hijri_month FOR UPDATE`);
+    const months=rows.map(r=>({...r,days:daysBetween(r.startDate,r.endDate)}));
+    // Don't change any school which already has custom month boundaries.
+    const forecast=forecastYear(1448);
+    const isSeed=months.length===12&&months.every((m,i)=>m.startDate===forecast[i].startDate&&m.endDate===forecast[i].endDate);
+    const corrected=isSeed?correctJumada1448(months):null;
+    if(corrected){
+      for(let i=0;i<corrected.length;i++){
+        const m=corrected[i],previous=months[i];
+        if(m.startDate===previous.startDate&&m.endDate===previous.endDate&&m.confirmed===previous.confirmed)continue;
+        await client.query(`UPDATE attendance_hijri_months SET start_date=$3::date,end_date=$4::date,source_url=$5,confirmed=$6,updated_at=now() WHERE hijri_year=$1 AND hijri_month=$2`,[1448,m.month,m.startDate,m.endDate,m.sourceUrl,m.confirmed]);
+      }
+    }
+    await client.query('COMMIT');
+    return Boolean(corrected);
+  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+}

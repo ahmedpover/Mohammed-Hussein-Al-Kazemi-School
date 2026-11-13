@@ -6,6 +6,7 @@ import { sendMedia } from './media-response.js';
 import { provisionAdmins } from './admin-bootstrap.js';
 import { createQuestionsRouter, initQuestionTables } from './questions.js';
 import { createAttendanceRouter, initAttendanceTables } from './attendance.js';
+import { applyJumada1448Correction } from './hijri-calendar.js';
 import express from 'express';
 import pg from 'pg';
 import multer from 'multer';
@@ -77,6 +78,7 @@ async function init() {
  await provisionAdmins({ query, hash, verify, id });
  await initQuestionTables(query);
  await initAttendanceTables(query);
+ await applyJumada1448Correction(pool);
 }
 // Delivery is best effort: publishing content must never fail because a push provider is offline.
 async function pushToStudents(studentIdsSql, params, notification) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {forecastYear,reflowMonths,addDays,daysBetween,loadSchoolHijriYear} from '../hijri-calendar.js';
+import {forecastYear,reflowMonths,addDays,daysBetween,loadSchoolHijriYear,correctJumada1448} from '../hijri-calendar.js';
 
 test('all 12 provisional months are present and have 29 or 30 days',()=>{
   for(const y of [1447,1448,1449]){
@@ -47,4 +47,25 @@ test('the following year uses corrected previous-year end as global anchor',asyn
   const next=await loadSchoolHijriYear(query,1449);
   assert.equal(next[0].startDate,addDays(correctedLast,1));
   assert.equal(next.length,12);
+});
+
+test('2026-11-13 maps to 2 Jumada al-Akhira 1448 without gaps or 31-day months',()=>{
+  const original=forecastYear(1448);
+  const revised=correctJumada1448(original);
+  assert.ok(revised);
+  assert.equal(revised[5].startDate,'2026-11-12');
+  assert.equal(addDays(revised[5].startDate,1),'2026-11-13');
+  assert.equal(revised[5].sourceUrl,'https://www.sistani.org/');
+  assert.equal(revised[0].startDate,original[0].startDate);
+  for(let i=0;i<revised.length;i++){
+    assert.ok([29,30].includes(revised[i].days));
+    if(i)assert.equal(addDays(revised[i-1].endDate,1),revised[i].startDate);
+  }
+  assert.equal(correctJumada1448(revised),null);
+});
+
+test('never overwrite previously confirmed manually corrected calendar',()=>{
+  const year=forecastYear(1448);
+  year[4].confirmed=true;
+  assert.equal(correctJumada1448(year),null);
 });
