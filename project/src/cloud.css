@@ -54,3 +54,14 @@
 .cloud-admin form.cloud-invite-form label{min-width:0}
 .cloud-admin form.cloud-invite-form input{min-width:0}
 @media(max-width:600px){.cloud-admin form.cloud-invite-form{padding:12px}.cloud-admin form.cloud-invite-form .modal-actions{flex-wrap:wrap}}
+
+/* Multiple independent logins on the same browser */
+.multi-accounts {margin:1.25rem 0;padding:1rem;border:1px solid var(--line, #d9dfd6);border-radius:16px;}
+.multi-accounts h4 {margin:.25rem 0 .5rem;}
+.multi-account-list {display:grid;gap:.6rem;margin:1rem 0;}
+.multi-account-item {width:100%;display:flex;align-items:center;text-align:start;gap:.75rem;border:1px solid #d5ddd8;border-radius:12px;padding:.7rem;background:transparent;color:inherit;cursor:pointer;}
+.multi-account-item.current {border-color:#6e977e;opacity:.8;}
+.multi-account-item span:nth-child(2) {flex:1;min-width:0;display:grid;gap:.25rem;}
+.multi-account-item small {font-size:.78rem;overflow-wrap:anywhere;}
+.multi-account-form {margin-top:1rem;display:grid;gap:.75rem;}
+.multi-account-form .account-card {max-width:100%;}

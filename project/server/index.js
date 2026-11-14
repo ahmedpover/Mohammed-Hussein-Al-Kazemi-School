@@ -40,18 +40,34 @@ app.use('/api/auth/login', authLimit);
 app.use('/api/auth/register', authLimit);
 app.use('/api/auth', (req,res,next) => { if (req.method !== 'GET') { const origin=req.get('origin'); if (origin && origin !== `${req.protocol}://${req.get('host')}` && origin !== process.env.PUBLIC_ORIGIN) return next(fail(403,'مصدر الطلب غير مسموح.')); } next(); });
 app.use('/api', (req,res,next) => { if (req.method !== 'GET' && req.method !== 'HEAD') { const origin=req.get('origin'); if (origin && origin !== `${req.protocol}://${req.get('host')}` && origin !== process.env.PUBLIC_ORIGIN) return next(fail(403,'مصدر الطلب غير مسموح.')); } next(); });
-function cookie(req) { return String(req.headers.cookie || '').split(';').map(v=>v.trim()).find(v=>v.startsWith('school_session='))?.slice(15); }
+function namedCookie(req,name) { return String(req.headers.cookie || '').split(';').map(v=>v.trim()).find(v=>v.startsWith(name+'='))?.slice(name.length+1); }
+function cookie(req) { return namedCookie(req,'school_session'); }
+const deviceToken=req=>namedCookie(req,'school_device');
+const cookieOptions={httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:30*86400000};
+async function addDeviceAccount(req,res,userId){
+ let token=deviceToken(req);
+ // If a browser has no registered device, its first account establishes its device identity.
+ if(!token){ token=randomBytes(32).toString('hex');res.cookie('school_device',token,cookieOptions); }
+ await query(`INSERT INTO device_accounts(device_hash,user_id,expires_at) VALUES($1,$2,now()+interval '30 days') ON CONFLICT(device_hash,user_id) DO UPDATE SET expires_at=EXCLUDED.expires_at`,[digestToken(token),userId]);
+ return token;
+}
+async function linkedAccounts(req, overrideToken){
+ const token=overrideToken||deviceToken(req);if(!token)return [];
+ const {rows}=await query(`SELECT u.id,u.name,u.email,u.role FROM device_accounts d JOIN users u ON u.id=d.user_id WHERE d.device_hash=$1 AND d.expires_at>now() AND (u.role NOT IN ('teacher','representative') OR (u.role='teacher' AND EXISTS(SELECT 1 FROM invites i WHERE i.email=u.email AND i.active)) OR (u.role='representative' AND EXISTS(SELECT 1 FROM representative_invites r WHERE r.email=u.email AND r.active))) ORDER BY u.name,u.email`,[digestToken(token)]);return rows;
+}
 async function actor(req) { const token=cookie(req); if (!token) return null; const {rows}=await query(`SELECT u.id,u.email,u.name,u.role,i.name AS invited_name,i.subjects,i.active FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN invites i ON i.email=u.email WHERE s.token_hash=$1 AND s.expires_at>now()`,[digestToken(token)]); const user=rows[0]; if(!user) return null; if(user.role==='admin') return { ...user, role:'admin', subjects:[] }; if(user.role==='representative'){ const {rows:rep}=await query('SELECT group_id AS "groupId", active FROM representative_invites WHERE email=$1',[user.email]);if(!rep[0]?.active)return null;return {...user,role:'representative',groupId:rep[0].groupId,subjects:[]}; } if(user.role==='teacher' && user.invited_name && user.active) return {...user,role:'teacher',name:user.invited_name,subjects:user.subjects}; return {...user,role:'student',subjects:[]}; }
 const requireUser = wrap(async (req,res,next) => { req.actor=await actor(req); if(!req.actor) throw fail(401,'سجّل الدخول أولاً.'); next(); });
 const admin = req => { if(req.actor.role!=='admin') throw fail(403,'هذه العملية للمدير فقط.'); };
 const teaches = (req,subject) => { if(req.actor.role!=='teacher' || !req.actor.subjects.includes(subject)) throw fail(403,'هذه المادة غير معتمدة لحسابك.'); };
 async function representativeCanManage(req,channelId){return canRepresentativeManageChannel(req.actor,channelId,query);}
 async function owner(req,table,resource) { const {rows}=await query(`SELECT * FROM ${table} WHERE id=$1`,[resource]); const item=rows[0]; if(!item) throw fail(404,'العنصر غير موجود.'); if(req.actor.role!=='admin') { const channelId=table==='lectures'?item.channel_id:item.id; if(!(await representativeCanManage(req,channelId))){if(item.owner_id!==req.actor.id) throw fail(403,'ليست لديك صلاحية على هذا العنصر.'); teaches(req,item.subject);} } return item; }
-async function session(res,userId) { const token=randomBytes(32).toString('hex'); await query('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval \'30 days\')',[digestToken(token),userId]); res.cookie('school_session',token,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'lax',path:'/',maxAge:30*86400000}); }
+async function session(res,userId) { const token=randomBytes(32).toString('hex'); await query('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval \'30 days\')',[digestToken(token),userId]); res.cookie('school_session',token,cookieOptions); }
 async function init() {
  if(!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
  await query(`CREATE TABLE IF NOT EXISTS users(id uuid PRIMARY KEY,email text UNIQUE NOT NULL,name text NOT NULL,password_hash text NOT NULL,role text NOT NULL DEFAULT 'student',created_at timestamptz DEFAULT now());
  CREATE TABLE IF NOT EXISTS sessions(token_hash text PRIMARY KEY,user_id uuid REFERENCES users(id) ON DELETE CASCADE,expires_at timestamptz NOT NULL);
+ CREATE TABLE IF NOT EXISTS device_accounts(device_hash text NOT NULL,user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires_at timestamptz NOT NULL,PRIMARY KEY(device_hash,user_id));
+ CREATE TABLE IF NOT EXISTS device_push_endpoints(device_hash text NOT NULL,endpoint text NOT NULL,PRIMARY KEY(device_hash,endpoint));
  CREATE TABLE IF NOT EXISTS invites(email text PRIMARY KEY,name text NOT NULL,subjects jsonb NOT NULL,active boolean NOT NULL DEFAULT true,code_hash text);
  CREATE TABLE IF NOT EXISTS channels(id uuid PRIMARY KEY,handle text UNIQUE NOT NULL,name text NOT NULL,subject text NOT NULL,book text NOT NULL,description text NOT NULL DEFAULT '',owner_id uuid REFERENCES users(id),teacher_name text NOT NULL,created_at timestamptz DEFAULT now());
  CREATE TABLE IF NOT EXISTS memberships(user_id uuid REFERENCES users(id) ON DELETE CASCADE,channel_id uuid REFERENCES channels(id) ON DELETE CASCADE,PRIMARY KEY(user_id,channel_id));
@@ -70,6 +86,9 @@ async function init() {
  CREATE TABLE IF NOT EXISTS student_groups(id uuid PRIMARY KEY,name text NOT NULL UNIQUE,created_at timestamptz NOT NULL DEFAULT now());
  CREATE TABLE IF NOT EXISTS student_group_members(group_id uuid NOT NULL REFERENCES student_groups(id) ON DELETE CASCADE,student_id uuid NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(group_id,student_id));
  CREATE TABLE IF NOT EXISTS representative_invites(email text PRIMARY KEY,name text NOT NULL,group_id uuid NOT NULL REFERENCES student_groups(id) ON DELETE RESTRICT,active boolean NOT NULL DEFAULT true,code_hash text NOT NULL);`);
+ // The same web-push endpoint can belong to several separate accounts on one device.
+ await query('ALTER TABLE push_subscriptions DROP CONSTRAINT IF EXISTS push_subscriptions_endpoint_key');
+ await query('CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_endpoint_user_idx ON push_subscriptions(endpoint,user_id)');
  // Representatives are students for roster/attendance purposes, while retaining their limited role.
  await query(`INSERT INTO student_group_members(group_id,student_id)
  SELECT ri.group_id,u.id FROM users u JOIN representative_invites ri ON ri.email=u.email
@@ -84,10 +103,10 @@ async function init() {
 async function pushToStudents(studentIdsSql, params, notification) {
   if (!getPushPublicKey()) return;
   try {
-    const {rows}=await query(`SELECT ps.id,ps.subscription FROM push_subscriptions ps JOIN users u ON u.id=ps.user_id WHERE u.role='student' AND ps.user_id IN (${studentIdsSql})`,params);
+    const {rows}=await query(`SELECT ps.id,ps.subscription,ps.user_id AS "userId",u.name AS "studentName" FROM push_subscriptions ps JOIN users u ON u.id=ps.user_id WHERE u.role='student' AND ps.user_id IN (${studentIdsSql})`,params);
     await Promise.allSettled(rows.map(async item => {
       try {
-        const result=await sendWebPush(item.subscription,notification);
+        const url=new URL(notification.url||'/', 'https://school.local');url.searchParams.set('account',item.userId);const result=await sendWebPush(item.subscription,{...notification,title:`${item.studentName} • ${notification.title||'إشعار المدرسة'}`,url:url.pathname+url.search});
         if(result.gone) await query('DELETE FROM push_subscriptions WHERE id=$1',[item.id]);
         else if(!result.ok && !result.disabled) console.warn('Push provider returned',result.status);
       } catch(e) { console.warn('Push delivery failed:',e.message); }
@@ -98,18 +117,23 @@ function pushChannel(channelId,notification) {
   void pushToStudents('SELECT user_id FROM memberships WHERE channel_id=$1',[channelId],notification);
 }
 function pushStudent(studentId,notification) { void pushToStudents('SELECT $1::uuid',[studentId],notification); }
-app.get('/api/push/key', requireUser, (req,res)=>res.json({publicKey:req.actor.role==='student'?getPushPublicKey():null}));
+app.get('/api/push/key', requireUser,wrap(async(req,res)=>res.json({publicKey:(await linkedAccounts(req)).some(a=>a.role==='student')||req.actor.role==='student'?getPushPublicKey():null})));
 app.post('/api/push/subscriptions',requireUser,wrap(async(req,res)=>{
-  if(req.actor.role!=='student')throw fail(403,'الإشعارات مخصصة للطلاب.');
   if(!getPushPublicKey())throw fail(503,'الإشعارات غير مفعلة على الخادم.');
   if(!validSubscription(req.body))throw fail(400,'بيانات الاشتراك غير صالحة.');
-  await query(`INSERT INTO push_subscriptions(id,user_id,endpoint,subscription) VALUES($1,$2,$3,$4)
-    ON CONFLICT(endpoint) DO UPDATE SET user_id=$2,subscription=$4`,[id(),req.actor.id,req.body.endpoint,JSON.stringify(req.body)]);
-  res.status(201).json({ok:true});
+  const ids=[...new Set((await linkedAccounts(req)).filter(a=>a.role==='student').map(a=>a.id))];
+  if(req.actor.role==='student'&&!ids.includes(req.actor.id))ids.push(req.actor.id);
+  if(!ids.length)throw fail(403,'أضف حساب طالب أولاً لتفعيل إشعاراته.');
+  for(const studentId of ids)await query(`INSERT INTO push_subscriptions(id,user_id,endpoint,subscription) VALUES($1,$2,$3,$4)
+    ON CONFLICT(endpoint,user_id) DO UPDATE SET subscription=EXCLUDED.subscription`,[id(),studentId,req.body.endpoint,JSON.stringify(req.body)]);
+  if(deviceToken(req))await query('INSERT INTO device_push_endpoints(device_hash,endpoint) VALUES($1,$2) ON CONFLICT DO NOTHING',[digestToken(deviceToken(req)),req.body.endpoint]);
+  // Remove outdated device associations when an account was removed from this device.
+  await query('DELETE FROM push_subscriptions WHERE endpoint=$1 AND NOT(user_id=ANY($2::uuid[]))',[req.body.endpoint,ids]);
+  res.status(201).json({ok:true,accounts:ids.length});
 }));
 app.delete('/api/push/subscriptions',requireUser,wrap(async(req,res)=>{
   const endpoint=String(req.body?.endpoint||'');
-  if(endpoint)await query('DELETE FROM push_subscriptions WHERE user_id=$1 AND endpoint=$2',[req.actor.id,endpoint]);
+  if(endpoint){const ids=(await linkedAccounts(req)).map(a=>a.id);if(!ids.includes(req.actor.id))ids.push(req.actor.id);await query('DELETE FROM push_subscriptions WHERE endpoint=$1 AND user_id=ANY($2::uuid[])',[endpoint,ids]);}
   res.json({ok:true});
 }));
 app.get('/api/health',(_req,res)=>res.json({ok:true}));
@@ -119,9 +143,30 @@ app.post('/api/auth/register',wrap(async(req,res)=>{ const email=emailKey(req.bo
  if(teacherRows[0]?.active&&teacherRows[0].code_hash===digestToken(inviteCode))role='teacher';
  else if(representativeRows[0]?.active&&representativeRows[0].code_hash===digestToken(inviteCode))role='representative';
  else throw fail(403,'رمز الدعوة غير صحيح.');
-} const userId=id(); await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[userId,email,name,await hash(password),role]); if(role==='representative'){await query(`INSERT INTO student_group_members(group_id,student_id) SELECT group_id,$2 FROM representative_invites WHERE email=$1 AND active=true ON CONFLICT(student_id) DO UPDATE SET group_id=EXCLUDED.group_id`,[email,userId]);} await session(res,userId); res.status(201).json({ok:true}); } catch(e){ if(e.code==='23505') throw fail(409,'البريد مسجّل مسبقًا.'); throw e; } }));
-app.post('/api/auth/login',wrap(async(req,res)=>{ const {rows}=await query('SELECT id,email,role,password_hash FROM users WHERE email=$1',[emailKey(req.body.email)]); if(!rows.length || !(await verify(String(req.body.password||''),rows[0].password_hash))) throw fail(401,'البريد أو كلمة المرور غير صحيحة.'); if(rows[0].role==='representative'){const {rows:invite}=await query('SELECT active FROM representative_invites WHERE email=$1',[rows[0].email]);if(!invite[0]?.active)throw fail(403,'حساب الممثل غير مفعّل، راجع الإدارة.');} await session(res,rows[0].id); res.json({ok:true}); }));
-app.post('/api/auth/logout',wrap(async(req,res)=>{ const token=cookie(req); if(token) await query('DELETE FROM sessions WHERE token_hash=$1',[digestToken(token)]); res.clearCookie('school_session',{path:'/'}); res.json({ok:true}); }));
+} const userId=id(); await query('INSERT INTO users(id,email,name,password_hash,role) VALUES($1,$2,$3,$4,$5)',[userId,email,name,await hash(password),role]); if(role==='representative'){await query(`INSERT INTO student_group_members(group_id,student_id) SELECT group_id,$2 FROM representative_invites WHERE email=$1 AND active=true ON CONFLICT(student_id) DO UPDATE SET group_id=EXCLUDED.group_id`,[email,userId]);} await addDeviceAccount(req,res,userId); await session(res,userId); res.status(201).json({ok:true}); } catch(e){ if(e.code==='23505') throw fail(409,'البريد مسجّل مسبقًا.'); throw e; } }));
+app.post('/api/auth/login',wrap(async(req,res)=>{ const {rows}=await query('SELECT id,email,role,password_hash FROM users WHERE email=$1',[emailKey(req.body.email)]); if(!rows.length || !(await verify(String(req.body.password||''),rows[0].password_hash))) throw fail(401,'البريد أو كلمة المرور غير صحيحة.'); if(rows[0].role==='representative'){const {rows:invite}=await query('SELECT active FROM representative_invites WHERE email=$1',[rows[0].email]);if(!invite[0]?.active)throw fail(403,'حساب الممثل غير مفعّل، راجع الإدارة.');} await addDeviceAccount(req,res,rows[0].id); await session(res,rows[0].id); res.json({ok:true}); }));
+app.get('/api/auth/accounts',wrap(async(req,res)=>{
+  const current=await actor(req);const token=current&&!deviceToken(req)?await addDeviceAccount(req,res,current.id):deviceToken(req);res.json({activeId:current?.id||null,accounts:await linkedAccounts(req,token)});
+}));
+app.post('/api/auth/switch',wrap(async(req,res)=>{
+  const target=String(req.body?.accountId||'');
+  if(!validUUID(target))throw fail(400,'الحساب غير صالح.');
+  const accounts=await linkedAccounts(req);
+  if(!accounts.some(a=>a.id===target))throw fail(403,'الحساب غير مضاف على هذا الجهاز أو انتهت صلاحيته.');
+  const old=cookie(req);if(old)await query('DELETE FROM sessions WHERE token_hash=$1',[digestToken(old)]);
+  await session(res,target);res.json({ok:true});
+}));
+app.post('/api/auth/logout',wrap(async(req,res)=>{
+  const token=cookie(req);let userId=null;
+  if(token){const {rows}=await query('DELETE FROM sessions WHERE token_hash=$1 RETURNING user_id',[digestToken(token)]);userId=rows[0]?.user_id;}
+  if(userId&&deviceToken(req)){await query('DELETE FROM push_subscriptions WHERE user_id=$1 AND endpoint IN (SELECT endpoint FROM device_push_endpoints WHERE device_hash=$2)',[userId,digestToken(deviceToken(req))]);await query('DELETE FROM device_accounts WHERE device_hash=$1 AND user_id=$2',[digestToken(deviceToken(req)),userId]);}
+  res.clearCookie('school_session',{path:'/'});res.json({ok:true});
+}));
+app.post('/api/auth/logout-all',requireUser,wrap(async(req,res)=>{
+  const token=deviceToken(req);if(token){const ids=(await linkedAccounts(req)).map(a=>a.id);if(ids.length)await query('DELETE FROM push_subscriptions WHERE user_id=ANY($1::uuid[]) AND endpoint IN (SELECT endpoint FROM device_push_endpoints WHERE device_hash=$2)',[ids,digestToken(token)]);await query('DELETE FROM device_push_endpoints WHERE device_hash=$1',[digestToken(token)]);await query('DELETE FROM device_accounts WHERE device_hash=$1',[digestToken(token)]);}
+  const active=cookie(req);if(active)await query('DELETE FROM sessions WHERE token_hash=$1',[digestToken(active)]);
+  res.clearCookie('school_session',{path:'/'});res.clearCookie('school_device',{path:'/'});res.json({ok:true});
+}));
 app.delete('/api/auth/account',requireUser,wrap(async(req,res)=>{
  const password=req.body?.password;
  if(typeof password!=='string'||!password) throw fail(400,'أدخل كلمة المرور لتأكيد حذف الحساب.');
